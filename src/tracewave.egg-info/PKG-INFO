@@ -2,6 +2,7 @@ Metadata-Version: 2.4
 Name: tracewave
 Version: 0.1.0
 Summary: TraceWave video tracking pipeline using SAM2
+License: MIT
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 License-File: LICENSE

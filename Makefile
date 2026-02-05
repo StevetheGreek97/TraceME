@@ -7,6 +7,7 @@ PYTHON_BIN ?= python3
 DIST_DIR ?= dist
 DIST_VENV_DIR ?= .venv-dist
 DIST_VENV_BIN := $(DIST_VENV_DIR)/bin
+TWINE_BOOTSTRAP ?= 1
 
 INSTALL_SAM2 ?= 1
 SAM2_REPO_URL ?= https://github.com/facebookresearch/sam2.git
@@ -15,7 +16,7 @@ SAM2_REPO_REF ?=
 SAM2_DOWNLOAD_CHECKPOINTS ?= 1
 SAM2_INSTALL_NOTEBOOKS ?= 0
 
-.PHONY: help install install-nosam2 run gen-tasks build test-install check-dist clean
+.PHONY: help install install-nosam2 run gen-tasks build test-install check-dist publish publish-test clean
 
 help: ## Show available targets
 	@printf "Usage: make <target> [VAR=value]\n\n"
@@ -26,6 +27,7 @@ help: ## Show available targets
 	@printf "  PYTHON_BIN=%s\n" "$(PYTHON_BIN)"
 	@printf "  DIST_DIR=%s\n" "$(DIST_DIR)"
 	@printf "  DIST_VENV_DIR=%s\n" "$(DIST_VENV_DIR)"
+	@printf "  TWINE_BOOTSTRAP=%s\n" "$(TWINE_BOOTSTRAP)"
 	@printf "  INSTALL_SAM2=%s\n" "$(INSTALL_SAM2)"
 	@printf "  SAM2_REPO_URL=%s\n" "$(SAM2_REPO_URL)"
 	@printf "  SAM2_ROOT=%s\n" "$(SAM2_ROOT)"
@@ -69,7 +71,17 @@ test-install: build ## Install wheel into a clean venv and verify import/CLI
 	@$(DIST_VENV_BIN)/tracewave --help >/dev/null
 
 check-dist: ## Verify dist metadata with twine
-	@$(PYTHON_BIN) -m twine check "$(DIST_DIR)"/*
+	@$(PYTHON_BIN) -m venv "$(DIST_VENV_DIR)"
+	@if [[ "$(TWINE_BOOTSTRAP)" == "1" ]]; then \
+		$(DIST_VENV_BIN)/pip install --upgrade pip twine packaging; \
+	fi
+	@$(DIST_VENV_BIN)/python -m twine check "$(DIST_DIR)"/*
+
+publish: check-dist ## Upload dist/* to PyPI
+	@$(DIST_VENV_BIN)/python -m twine upload "$(DIST_DIR)"/*
+
+publish-test: check-dist ## Upload dist/* to TestPyPI
+	@$(DIST_VENV_BIN)/python -m twine upload --repository testpypi "$(DIST_DIR)"/*
 
 clean: ## Remove venv and caches
 	@rm -rf "$(VENV_DIR)" "$(DIST_VENV_DIR)" "$(DIST_DIR)" build *.egg-info
