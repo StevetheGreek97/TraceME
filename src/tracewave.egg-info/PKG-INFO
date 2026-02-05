@@ -1,3 +1,20 @@
+Metadata-Version: 2.4
+Name: tracewave
+Version: 0.1.0
+Summary: TraceWave video tracking pipeline using SAM2
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy>=1.24
+Requires-Dist: torch>=2.5.1
+Requires-Dist: torchvision>=0.20.1
+Requires-Dist: opencv-python-headless>=4.8
+Requires-Dist: pandas>=2.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: imageio-ffmpeg>=0.4.9
+Requires-Dist: sam2>=1.1.0
+Dynamic: license-file
+
 # TraceWave Pipeline
 
 TraceWave is a video tracking pipeline that runs SAM2 on frame sequences, produces per-frame CSV summaries, and exports annotated videos.
