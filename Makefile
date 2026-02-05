@@ -8,6 +8,7 @@ DIST_DIR ?= dist
 DIST_VENV_DIR ?= .venv-dist
 DIST_VENV_BIN := $(DIST_VENV_DIR)/bin
 TWINE_BOOTSTRAP ?= 1
+TWINE_REPOSITORY ?= pypi
 
 INSTALL_SAM2 ?= 1
 SAM2_REPO_URL ?= https://github.com/facebookresearch/sam2.git
@@ -28,6 +29,7 @@ help: ## Show available targets
 	@printf "  DIST_DIR=%s\n" "$(DIST_DIR)"
 	@printf "  DIST_VENV_DIR=%s\n" "$(DIST_VENV_DIR)"
 	@printf "  TWINE_BOOTSTRAP=%s\n" "$(TWINE_BOOTSTRAP)"
+	@printf "  TWINE_REPOSITORY=%s\n" "$(TWINE_REPOSITORY)"
 	@printf "  INSTALL_SAM2=%s\n" "$(INSTALL_SAM2)"
 	@printf "  SAM2_REPO_URL=%s\n" "$(SAM2_REPO_URL)"
 	@printf "  SAM2_ROOT=%s\n" "$(SAM2_ROOT)"
@@ -78,7 +80,7 @@ check-dist: ## Verify dist metadata with twine
 	@$(DIST_VENV_BIN)/python -m twine check "$(DIST_DIR)"/*
 
 publish: check-dist ## Upload dist/* to PyPI
-	@$(DIST_VENV_BIN)/python -m twine upload "$(DIST_DIR)"/*
+	@$(DIST_VENV_BIN)/python -m twine upload --repository "$(TWINE_REPOSITORY)" "$(DIST_DIR)"/*
 
 publish-test: check-dist ## Upload dist/* to TestPyPI
 	@$(DIST_VENV_BIN)/python -m twine upload --repository testpypi "$(DIST_DIR)"/*
