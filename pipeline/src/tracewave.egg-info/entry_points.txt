@@ -1,0 +1,4 @@
+[console_scripts]
+tracewave = tracewave.cli:main
+tracewave-download-checkpoints = tracewave.tools.download_sam2:main
+tracewave-gen-tasks = tracewave.tools.gen_tasks:main

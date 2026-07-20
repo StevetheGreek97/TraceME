@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tracewave"
+version = "0.2.0"
+description = "TraceWave video tracking pipeline using SAM2"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+  "numpy>=1.24",
+  "torch>=2.5.1",
+  "torchvision>=0.20.1",
+  "opencv-python-headless>=4.8",
+  "pandas>=2.0",
+  "pyyaml>=6.0",
+  "imageio-ffmpeg>=0.4.9",
+  "sam2>=1.1.0",
+]
+
+[project.scripts]
+tracewave-gen-tasks = "tracewave.tools.gen_tasks:main"
+tracewave = "tracewave.cli:main"
+tracewave-download-checkpoints = "tracewave.tools.download_sam2:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["tracewave*"]
