@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tracewave"
+version = "0.1.0"
+description = "Desktop app for annotating video frames with points, boxes, and polygons."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Stylianos Mavrianos" }
+]
+dependencies = [
+  "PyQt6",
+  "numpy"
+]
+
+[project.optional-dependencies]
+sam2 = [
+  "torch",
+  "opencv-python",
+  "sam2"
+]
+yaml = [
+  "pyyaml"
+]
+
+[project.scripts]
+tracewave = "src.tracewave:main"
+
+[project.urls]
+Homepage = "https://example.com/tracewave"
+
+[tool.setuptools.packages.find]
+include = ["src", "src.*"]
+
+[tool.setuptools.package-data]
+src = ["sam2_configs/*.yaml"]
