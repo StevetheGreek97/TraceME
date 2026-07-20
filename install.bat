@@ -25,7 +25,13 @@ rem ---- Ensure FFmpeg / FFprobe are available (required for video import) ----
 set "FFMPEG_DIR=%FFMPEG_DIR%"
 if "%FFMPEG_DIR%"=="" set "FFMPEG_DIR=%~dp0.ffmpeg"
 set "FFMPEG_URL=%FFMPEG_URL%"
-if "%FFMPEG_URL%"=="" set "FFMPEG_URL=https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+if "%FFMPEG_URL%"=="" (
+  set "FFMPEG_URL_1=https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+  set "FFMPEG_URL_2=https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip"
+) else (
+  set "FFMPEG_URL_1=%FFMPEG_URL%"
+  set "FFMPEG_URL_2="
+)
 
 where ffmpeg >nul 2>nul
 set "HAS_FFMPEG=%errorlevel%"
@@ -43,12 +49,16 @@ if not "%HAS_FFMPEG%"=="0" (
     echo FFmpeg not found. Downloading portable build...
     if not exist "%FFMPEG_DIR%" mkdir "%FFMPEG_DIR%"
     set "FFMPEG_ZIP=%FFMPEG_DIR%\ffmpeg.zip"
-    powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $u='%FFMPEG_URL%'; $o='%FFMPEG_ZIP%'; Invoke-WebRequest -Uri $u -OutFile $o"
-    if errorlevel 1 (
-      echo Error: Failed to download FFmpeg.
-      echo Please install FFmpeg manually and ensure ffmpeg/ffprobe are on PATH.
-      exit /b 1
+    for %%U in ("%FFMPEG_URL_1%" "%FFMPEG_URL_2%") do (
+      if not "%%~U"=="" (
+        call :download_ffmpeg "%%~U" "%FFMPEG_ZIP%"
+        if not errorlevel 1 goto :ffmpeg_download_ok
+      )
     )
+    echo Error: Failed to download FFmpeg.
+    echo You can retry, or set FFMPEG_URL to a direct .zip, or install manually.
+    exit /b 1
+    :ffmpeg_download_ok
     powershell -NoProfile -Command "$ErrorActionPreference='Stop'; Expand-Archive -Force -Path '%FFMPEG_ZIP%' -DestinationPath '%FFMPEG_DIR%'"
     if errorlevel 1 (
       echo Error: Failed to extract FFmpeg.
@@ -120,3 +130,23 @@ if not exist "%SAM2_WEIGHTS%" (
 echo Done.
 echo Activate with: %VENV%\Scripts\activate.bat
 echo Run with: %VENV%\Scripts\python.exe -m src.tracewave
+exit /b 0
+
+:download_ffmpeg
+set "DL_URL=%~1"
+set "DL_OUT=%~2"
+echo Downloading: %DL_URL%
+powershell -NoProfile -Command "$ProgressPreference='SilentlyContinue'; $ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%DL_URL%' -OutFile '%DL_OUT%'"
+if errorlevel 1 (
+  where curl >nul 2>nul
+  if "%errorlevel%"=="0" (
+    curl -L -o "%DL_OUT%" "%DL_URL%"
+  ) else (
+    where bitsadmin >nul 2>nul
+    if "%errorlevel%"=="0" (
+      bitsadmin /transfer ffmpegdownload /download /priority normal "%DL_URL%" "%DL_OUT%"
+    )
+  )
+)
+if not exist "%DL_OUT%" exit /b 1
+exit /b 0
