@@ -6,3 +6,4 @@ __pycache__/
 *.onnx
 *.ckpt
 .venv/
+tracewave.egg-info/

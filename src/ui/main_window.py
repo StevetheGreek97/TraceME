@@ -11,9 +11,10 @@ except Exception:
     cv2 = None
 from PyQt6 import QtGui
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QKeySequence, QShortcut, QPixmap
+from PyQt6.QtGui import QKeySequence, QShortcut, QPixmap, QColor, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
+    QColorDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -24,7 +25,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QProgressBar,
     QSlider,
-    QSpinBox,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -38,10 +38,10 @@ from PyQt6.QtWidgets import (
 
 from src.models import AnnotationModel, load_annotations, save_annotations, export_yaml
 from src.project.store import create_project, load_project, save_project
-from src.project.types import Project, VideoItem
+from src.project.types import ClassLabel, Project, VideoItem
 from src.services.sam2_service import Sam2Service
 from src.services.video_importer import VideoImportThread, VideoImportResult, has_ffmpeg, VIDEO_EXTS
-from src.ui.image_view import ImageView
+from src.ui.image_view import BASE_COLORS, ImageView
 
 
 class MainWindow(QMainWindow):
@@ -85,21 +85,31 @@ class MainWindow(QMainWindow):
         self.video_tree.setHeaderHidden(True)
         self.video_tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
         left_v.addWidget(self.video_tree, 1)
+
+        left_v.addWidget(QLabel("Objects"))
+        self.objects_list = QListWidget()
+        self.objects_list.itemSelectionChanged.connect(self._on_object_selection_changed)
+        left_v.addWidget(self.objects_list, 1)
+
+        objects_btn_row = QHBoxLayout()
+        self.btn_add_object = QPushButton("+ Add")
+        self.btn_rename_object = QPushButton("Rename")
+        self.btn_recolor_object = QPushButton("Recolor")
+        self.btn_delete_object = QPushButton("Delete")
+        for b in (self.btn_add_object, self.btn_rename_object, self.btn_recolor_object, self.btn_delete_object):
+            objects_btn_row.addWidget(b)
+        left_v.addLayout(objects_btn_row)
+
+        self.btn_add_object.clicked.connect(self.action_add_object)
+        self.btn_rename_object.clicked.connect(self.action_rename_object)
+        self.btn_recolor_object.clicked.connect(self.action_recolor_object)
+        self.btn_delete_object.clicked.connect(self.action_delete_object)
+
         splitter.addWidget(left)
 
         # RIGHT: controls + view
         right = QWidget()
         right_v = QVBoxLayout(right)
-
-        # toolbar row
-        hb = QHBoxLayout()
-        hb.addWidget(QLabel("Obj ID:"))
-        self.obj_spin = QSpinBox()
-        self.obj_spin.setRange(1, 9999)
-        self.obj_spin.setValue(1)
-        hb.addWidget(self.obj_spin)
-        hb.addStretch(1)
-        right_v.addLayout(hb)
 
         # content splitter: frames list + image view
         self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -165,6 +175,8 @@ class MainWindow(QMainWindow):
         self.view.on_set_box = self.set_box
         self.view.on_remove_point = self.remove_point
         self.view.get_current_obj_id = lambda: self.current_obj_id()
+        self.view.get_object_color = self._object_color
+        self.view.get_object_name = self._object_name
 
         self.slider.valueChanged.connect(self._on_slider_value_changed)
 
@@ -262,9 +274,28 @@ class MainWindow(QMainWindow):
                 model.load_records(records_by_video[vid.id])
             self.models[vid.id] = model
 
+        self._migrate_legacy_objects()
         self._refresh_video_tree(select_id=project.ui_state.last_video_id)
         self._set_project_enabled(True)
         self.apply_ui_state()
+
+    def _migrate_legacy_objects(self):
+        """Backfill an object registry entry for any obj_id already used in
+        annotations but missing from project.classes (e.g. projects saved
+        before the Objects panel existed)."""
+        if not self.project:
+            return
+        used_ids = set()
+        for model in self.models.values():
+            for fr in model.ann.values():
+                used_ids.update(fr.objects.keys())
+        known_ids = {c.obj_id for c in self.project.classes}
+        missing = sorted(used_ids - known_ids)
+        if not missing:
+            return
+        for oid in missing:
+            self.project.classes.append(ClassLabel(obj_id=oid, name=f"Object {oid}", color=self._next_palette_color()))
+        self.project.next_obj_id = max(self.project.next_obj_id, max(missing) + 1)
 
     def save_current_project(self):
         if not self.project:
@@ -282,13 +313,15 @@ class MainWindow(QMainWindow):
         state.last_frame_index = self.current_index()
         state.mode = self.view.mode
         state.show_only_annotated = self.btn_toggle_annotated.isChecked()
-        state.last_obj_id = self.current_obj_id()
+        oid = self.current_obj_id()
+        if oid is not None:
+            state.last_obj_id = oid
 
     def apply_ui_state(self):
         if not self.project:
             return
         state = self.project.ui_state
-        self.obj_spin.setValue(state.last_obj_id or 1)
+        self._refresh_objects_list(select_obj_id=state.last_obj_id)
         self.set_mode(state.mode or "box")
         self.btn_toggle_annotated.setChecked(state.show_only_annotated)
 
@@ -371,12 +404,17 @@ class MainWindow(QMainWindow):
     # ---------------- UI helpers ----------------
     def _set_project_enabled(self, enabled: bool):
         for w in [
-            self.obj_spin,
+            self.objects_list,
+            self.btn_add_object,
             self.frame_list,
             self.slider,
             self.btn_toggle_annotated,
         ]:
             w.setEnabled(enabled)
+        if not enabled:
+            self.btn_rename_object.setEnabled(False)
+            self.btn_recolor_object.setEnabled(False)
+            self.btn_delete_object.setEnabled(False)
         self.content_splitter.setVisible(enabled)
         self.empty_panel.setVisible(not enabled)
         self.act_save_project.setEnabled(enabled)
@@ -432,8 +470,158 @@ class MainWindow(QMainWindow):
         model = self.current_model()
         return len(model.frames) if model else 0
 
-    def current_obj_id(self) -> int:
-        return int(self.obj_spin.value())
+    def current_obj_id(self) -> Optional[int]:
+        items = self.objects_list.selectedItems()
+        if not items:
+            return None
+        return int(items[0].data(Qt.ItemDataRole.UserRole))
+
+    def _object_color(self, obj_id: int) -> Optional[QColor]:
+        if not self.project:
+            return None
+        obj = self.project.get_object(obj_id)
+        return QColor(obj.color) if obj else None
+
+    def _object_name(self, obj_id: int) -> str:
+        if not self.project:
+            return f"Object {obj_id}"
+        obj = self.project.get_object(obj_id)
+        return obj.name if obj else f"Object {obj_id}"
+
+    def _swatch_icon(self, color: QColor) -> QIcon:
+        pix = QPixmap(14, 14)
+        pix.fill(color)
+        return QIcon(pix)
+
+    def _next_palette_color(self) -> str:
+        if not self.project:
+            r, g, b = BASE_COLORS[0]
+            return f"#{r:02X}{g:02X}{b:02X}"
+        used = {c.color.strip().lower() for c in self.project.classes}
+        n = len(BASE_COLORS)
+        start = len(self.project.classes) % n
+        for i in range(n):
+            r, g, b = BASE_COLORS[(start + i) % n]
+            hexs = f"#{r:02X}{g:02X}{b:02X}"
+            if hexs.lower() not in used:
+                return hexs
+        r, g, b = BASE_COLORS[start % n]
+        return f"#{r:02X}{g:02X}{b:02X}"
+
+    def _refresh_objects_list(self, select_obj_id: Optional[int] = None):
+        self.objects_list.blockSignals(True)
+        self.objects_list.clear()
+        if self.project:
+            for c in self.project.classes:
+                item = QListWidgetItem(c.name)
+                item.setIcon(self._swatch_icon(QColor(c.color)))
+                item.setData(Qt.ItemDataRole.UserRole, c.obj_id)
+                self.objects_list.addItem(item)
+        self.objects_list.blockSignals(False)
+        selected = self._select_object_by_id(select_obj_id) if select_obj_id is not None else False
+        if not selected and self.objects_list.count():
+            self.objects_list.setCurrentRow(0)
+        self._on_object_selection_changed()
+
+    def _select_object_by_id(self, obj_id: int) -> bool:
+        for row in range(self.objects_list.count()):
+            item = self.objects_list.item(row)
+            if int(item.data(Qt.ItemDataRole.UserRole)) == int(obj_id):
+                self.objects_list.setCurrentItem(item)
+                return True
+        return False
+
+    def _on_object_selection_changed(self):
+        has_selection = self.current_obj_id() is not None
+        self.btn_rename_object.setEnabled(has_selection)
+        self.btn_recolor_object.setEnabled(has_selection)
+        self.btn_delete_object.setEnabled(has_selection)
+
+    # ---------------- Object management ----------------
+    def action_add_object(self):
+        if not self.project:
+            return
+        name, ok = QInputDialog.getText(self, "New Object", "Object name:")
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            QMessageBox.warning(self, "Invalid name", "Object name cannot be empty.")
+            return
+        if self.project.object_name_exists(name):
+            QMessageBox.warning(self, "Duplicate name", f"An object named '{name}' already exists.")
+            return
+        obj = self.project.add_object(name, self._next_palette_color())
+        self._refresh_objects_list(select_obj_id=obj.obj_id)
+        self.save_current_project()
+        self.status.showMessage(f"Added object '{name}'.")
+
+    def action_rename_object(self):
+        if not self.project:
+            return
+        oid = self.current_obj_id()
+        if oid is None:
+            return
+        obj = self.project.get_object(oid)
+        if not obj:
+            return
+        name, ok = QInputDialog.getText(self, "Rename Object", "Object name:", text=obj.name)
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            QMessageBox.warning(self, "Invalid name", "Object name cannot be empty.")
+            return
+        if self.project.object_name_exists(name, exclude_obj_id=oid):
+            QMessageBox.warning(self, "Duplicate name", f"An object named '{name}' already exists.")
+            return
+        obj.name = name
+        self._refresh_objects_list(select_obj_id=oid)
+        self.redraw_annotations_for_current()
+        self.save_current_project()
+
+    def action_recolor_object(self):
+        if not self.project:
+            return
+        oid = self.current_obj_id()
+        if oid is None:
+            return
+        obj = self.project.get_object(oid)
+        if not obj:
+            return
+        color = QColorDialog.getColor(QColor(obj.color), self, "Choose Object Color")
+        if not color.isValid():
+            return
+        obj.color = color.name().upper()
+        self._refresh_objects_list(select_obj_id=oid)
+        self.redraw_annotations_for_current()
+        self.save_current_project()
+
+    def action_delete_object(self):
+        if not self.project:
+            return
+        oid = self.current_obj_id()
+        if oid is None:
+            return
+        obj = self.project.get_object(oid)
+        if not obj:
+            return
+        resp = QMessageBox.question(
+            self,
+            "Delete object",
+            f"Delete '{obj.name}' and all of its annotations across every video?\nThis cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if resp != QMessageBox.StandardButton.Yes:
+            return
+        for model in self.models.values():
+            model.delete_object(oid)
+        self.project.remove_object(oid)
+        self.view.remove_all_for_obj(oid)
+        self._refresh_objects_list()
+        self.update_frame_list()
+        self.save_current_project()
+        self.status.showMessage(f"Deleted object '{obj.name}'.")
 
     def _on_tree_selection_changed(self):
         items = self.video_tree.selectedItems()
@@ -568,7 +756,11 @@ class MainWindow(QMainWindow):
         if not model:
             return
         oid = self.current_obj_id()
+        if oid is None:
+            self.status.showMessage("Add an object to track first.")
+            return
         model.add_point(oid, x, y, label)
+        self.view.remove_polygon_for_obj(oid)
         self.refresh_list_item(model.index)
         self.mark_dirty()
 
@@ -577,7 +769,10 @@ class MainWindow(QMainWindow):
         if not model:
             return
         oid = self.current_obj_id()
+        if oid is None:
+            return
         model.remove_point(oid, x, y, label)
+        self.view.remove_polygon_for_obj(oid)
         self.refresh_list_item(model.index)
         self.mark_dirty()
 
@@ -586,66 +781,56 @@ class MainWindow(QMainWindow):
         if not model:
             return
         oid = self.current_obj_id()
+        if oid is None:
+            self.status.showMessage("Add an object to track first.")
+            return
         model.set_box(oid, x, y, w, h)
         self.view.set_box_visual(x, y, w, h, obj_id=oid)
+        self.view.remove_polygon_for_obj(oid)
         self.refresh_list_item(model.index)
         self.mark_dirty()
 
     def clear_mask_for_current(self):
-        print("DEBUG clear_mask_for_current: invoked")
         model = self.current_model()
-        if not model:
-            print("DEBUG clear_mask_for_current: no current model")
-            return
         if not model:
             return
         oid = self.current_obj_id()
-        print(f"DEBUG clear_mask_for_current: obj_id={oid}, frame_idx={model.index}")
+        if oid is None:
+            return
         model.set_polygon(oid, None)
         self.view.remove_polygon_for_obj(oid)
         self.refresh_list_item(model.index)
         self.mark_dirty()
 
     def run_sam2(self):
-        print("DEBUG run_sam2: invoked")
         model = self.current_model()
         if not model:
-            print("DEBUG run_sam2: no current model")
             return
-        if not self.sam2:
-            print("DEBUG run_sam2: sam2 service not initialized")
+        oid = self.current_obj_id()
+        if oid is None:
+            self.status.showMessage("Add an object to track first.")
             return
-        if not self.sam2.available:
-            print(f"DEBUG run_sam2: sam2 not available: {self.sam2.error}")
+        if not self.sam2 or not self.sam2.available:
+            self.status.showMessage(f"SAM2 unavailable: {self.sam2.error if self.sam2 else 'not initialized'}")
             return
         if cv2 is None:
             self.status.showMessage("OpenCV not available; SAM2 disabled.")
-            print("DEBUG run_sam2: cv2 is None")
             return
         fidx = model.index
-        oid = self.current_obj_id()
         obj = model.get_object(fidx, oid)
         if not obj:
-            print(f"DEBUG run_sam2: no object for frame={fidx}, obj_id={oid}")
             return
         if not obj.points and not (obj.box and obj.box[2] > 0 and obj.box[3] > 0):
-            print(f"DEBUG run_sam2: no prompts for frame={fidx}, obj_id={oid}")
+            self.status.showMessage("Add points or a box before running SAM2.")
             return
 
         img_path = model.frames[fidx]
         img_bgr = cv2.imread(str(img_path))
         if img_bgr is None:
-            print(f"DEBUG run_sam2: cv2.imread failed for {img_path}")
+            self.status.showMessage(f"Failed to read {img_path}")
             return
         img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
-        print(
-            "DEBUG run_sam2: running predictor",
-            f"points={len(obj.points)}",
-            f"labels={len(obj.labels)}",
-            f"box={obj.box}",
-            f"img={img.shape}",
-        )
         poly = self.sam2.generate_polygon(
             img,
             points_xy=[(int(x), int(y)) for x, y in obj.points],
@@ -653,9 +838,8 @@ class MainWindow(QMainWindow):
             box_xywh=list(obj.box) if obj.box else None,
         )
         if not poly:
-            print("DEBUG run_sam2: predictor returned empty polygon")
+            self.status.showMessage("SAM2 returned an empty mask.")
             return
-        print(f"DEBUG run_sam2: polygon length={len(poly)}")
         model.set_polygon(oid, poly)
         self.view.add_polygon_visual(poly, obj_id=oid)
         self.refresh_list_item(fidx)
@@ -717,21 +901,35 @@ class MainWindow(QMainWindow):
             "Quick Start\n"
             "1. File > New Project (or Open Project).\n"
             "2. File > Import Videos to extract frames.\n"
-            "3. Select a video from the tree on the left.\n"
-            "4. Annotate frames in the main view.\n"
-            "5. File > Export YAMLs to save per-video YAML files.\n\n"
+            "3. Objects panel (left): + Add an object to track, giving it a name.\n"
+            "4. Select a video from the tree on the left.\n"
+            "5. Annotate frames in the main view.\n"
+            "6. File > Export YAMLs to save per-video YAML files.\n\n"
             "Navigation\n"
             "- Right/Left arrows: next/previous frame.\n"
             "- Home/End: first/last frame.\n"
             "- Slider or frame list: jump to a frame.\n\n"
+            "Objects\n"
+            "- Objects panel: manage the things you're tracking, each with its\n"
+            "  own name and color, shared across every video in the project.\n"
+            "- + Add creates a new object with an auto-assigned color.\n"
+            "- Rename / Recolor change the selected object.\n"
+            "- Delete permanently removes the selected object and ALL of its\n"
+            "  annotations across every frame and video (cannot be undone; its\n"
+            "  id is never reused).\n"
+            "- The selected object in the list is the one you're annotating.\n"
+            "  Its name and color are shown on the canvas next to whatever\n"
+            "  you draw for it.\n\n"
             "Annotation Basics\n"
-            "- Obj ID: choose which object you are annotating.\n"
             "- Point mode (default):\n"
             "  - Left-click: positive point.\n"
             "  - Right-click: negative point.\n"
             "  - Ctrl-click a point: remove it.\n"
             "- Box override:\n"
-            "  - Hold Shift and drag with left mouse to draw a box.\n\n"
+            "  - Hold Shift and drag with left mouse to draw a box.\n"
+            "- Editing an object's points/box after a mask exists clears that\n"
+            "  mask automatically, since it no longer matches - press E again\n"
+            "  to regenerate it.\n\n"
             "Masks & SAM2\n"
             "- Press E to run SAM2 on the current object.\n"
             "- Press D to clear the current object's mask polygon.\n\n"

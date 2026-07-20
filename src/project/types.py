@@ -75,15 +75,20 @@ class UIState:
 
 @dataclass
 class ClassLabel:
+    obj_id: int
     name: str
     color: str  # hex string
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"name": self.name, "color": self.color}
+        return {"obj_id": int(self.obj_id), "name": self.name, "color": self.color}
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ClassLabel":
-        return cls(name=str(data.get("name", "class")), color=str(data.get("color", "#00FF00")))
+        return cls(
+            obj_id=int(data.get("obj_id", 0)),
+            name=str(data.get("name", "class")),
+            color=str(data.get("color", "#00FF00")),
+        )
 
 
 @dataclass
@@ -127,6 +132,7 @@ class Project:
     annotations_path: Path = field(default_factory=lambda: Path("annotations.json"))
     videos: List[VideoItem] = field(default_factory=list)
     classes: List[ClassLabel] = field(default_factory=list)
+    next_obj_id: int = 1
     ui_state: UIState = field(default_factory=UIState)
     sam2: Sam2Settings = field(default_factory=Sam2Settings)
 
@@ -150,6 +156,7 @@ class Project:
             "annotations_path": self.annotations_path.as_posix(),
             "videos": [v.to_dict() for v in self.videos],
             "classes": [c.to_dict() for c in self.classes],
+            "next_obj_id": int(self.next_obj_id),
             "ui_state": self.ui_state.to_dict(),
             "sam2": self.sam2.to_dict(),
         }
@@ -160,6 +167,12 @@ class Project:
         annotations_path = Path(data.get("annotations_path", "annotations.json"))
         videos = [VideoItem.from_dict(v) for v in data.get("videos", [])]
         classes = [ClassLabel.from_dict(c) for c in data.get("classes", [])]
+        # Legacy classes (predating obj_id) carry the 0 sentinel and are dropped;
+        # they were never wired to any obj_id and can't be trusted as identity.
+        classes = [c for c in classes if c.obj_id > 0]
+        next_obj_id = int(data.get("next_obj_id", 1))
+        if classes:
+            next_obj_id = max(next_obj_id, max(c.obj_id for c in classes) + 1)
         ui_state = UIState.from_dict(data.get("ui_state", {}))
         sam2 = Sam2Settings.from_dict(data.get("sam2", {}))
         return cls(
@@ -171,6 +184,7 @@ class Project:
             annotations_path=annotations_path,
             videos=videos,
             classes=classes,
+            next_obj_id=next_obj_id,
             ui_state=ui_state,
             sam2=sam2,
         )
@@ -178,9 +192,25 @@ class Project:
     def resolve_video_frames_dir(self, video: VideoItem) -> Path:
         return _from_rel(video.frames_dir, self.root)
 
-    def set_default_classes(self):
-        if not self.classes:
-            self.classes = [
-                ClassLabel(name="default", color="#00FF00"),
-                ClassLabel(name="object", color="#FFD700"),
-            ]
+    def add_object(self, name: str, color: str) -> ClassLabel:
+        obj = ClassLabel(obj_id=self.next_obj_id, name=name, color=color)
+        self.classes.append(obj)
+        self.next_obj_id += 1
+        return obj
+
+    def remove_object(self, obj_id: int):
+        self.classes = [c for c in self.classes if c.obj_id != int(obj_id)]
+
+    def get_object(self, obj_id: int) -> Optional[ClassLabel]:
+        for c in self.classes:
+            if c.obj_id == int(obj_id):
+                return c
+        return None
+
+    def object_name_exists(self, name: str, exclude_obj_id: Optional[int] = None) -> bool:
+        needle = name.strip().lower()
+        return any(
+            c.name.strip().lower() == needle
+            for c in self.classes
+            if exclude_obj_id is None or c.obj_id != int(exclude_obj_id)
+        )

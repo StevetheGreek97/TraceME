@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import json
+import os
 import re
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -30,31 +31,31 @@ class ObjectAnno:
     points: List[Tuple[int, int]] = field(default_factory=list)
     labels: List[int] = field(default_factory=list)  # 1=positive, 0=negative
     polygon: Optional[List[Tuple[int, int]]] = None
-    class_name: Optional[str] = None
 
     def add_point(self, x: int, y: int, label: int):
         self.points.append((int(x), int(y)))
         self.labels.append(int(label))
+        # A previously generated mask no longer reflects the updated prompts.
+        self.polygon = None
 
     def remove_point(self, x: int, y: int, label: int) -> bool:
         for i, ((px, py), lab) in enumerate(zip(self.points, self.labels)):
             if px == int(x) and py == int(y) and lab == int(label):
                 del self.points[i]
                 del self.labels[i]
+                self.polygon = None
                 return True
         return False
 
     def set_box(self, x: int, y: int, w: int, h: int):
         self.box = (int(x), int(y), int(w), int(h))
+        self.polygon = None
 
     def set_polygon(self, polygon: Optional[List[Tuple[int, int]]]):
         if polygon:
             self.polygon = [(int(x), int(y)) for x, y in polygon]
         else:
             self.polygon = None
-
-    def set_class(self, name: Optional[str]):
-        self.class_name = name
 
 
 @dataclass
@@ -116,16 +117,20 @@ class AnnotationModel:
         obj.set_polygon(polygon)
         self.dirty = True
 
-    def set_class(self, obj_id: int, class_name: Optional[str]):
-        obj = self._frame().ensure_object(obj_id)
-        obj.set_class(class_name)
-        self.dirty = True
-
     def clear_object(self, obj_id: int):
         if self.index not in self.ann:
             return
         if obj_id in self.ann[self.index].objects:
             self.ann[self.index].objects[obj_id] = ObjectAnno()
+            self.dirty = True
+
+    def delete_object(self, obj_id: int):
+        """Purge obj_id from every frame in this video (used when an object is deleted)."""
+        removed = False
+        for fr in self.ann.values():
+            if fr.objects.pop(int(obj_id), None) is not None:
+                removed = True
+        if removed:
             self.dirty = True
 
     def get_object(self, fidx: int, obj_id: int) -> Optional[ObjectAnno]:
@@ -165,8 +170,6 @@ class AnnotationModel:
                     "points": [[int(x), int(y)] for (x, y) in o.points],
                     "labels": [int(v) for v in o.labels],
                 }
-                if o.class_name:
-                    rec["class"] = o.class_name
                 if has_box:
                     rec["box"] = [int(v) for v in o.box]
                 if has_poly:
@@ -190,7 +193,6 @@ class AnnotationModel:
                 poly = rec.get("polygon", None)
                 if isinstance(poly, list) and len(poly) >= 3:
                     obj.polygon = [(int(x), int(y)) for x, y in poly]
-                obj.class_name = rec.get("class", None)
             except Exception:
                 continue
 
@@ -217,8 +219,10 @@ def save_annotations(path: Path, models: Dict[str, AnnotationModel]):
         model.dirty = False
     payload = {"schema_version": ANNOT_SCHEMA_VERSION, "annotations": all_records}
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
+    os.replace(tmp_path, path)
 
 
 def export_yaml(path: Path, models: Dict[str, AnnotationModel]) -> Tuple[bool, str]:

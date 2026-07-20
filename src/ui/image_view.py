@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from PyQt6 import QtCore, QtGui
 from PyQt6.QtCore import Qt
@@ -8,10 +8,12 @@ from PyQt6.QtGui import QPixmap, QPen, QColor, QPolygonF, QBrush
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
     QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPolygonItem,
+    QGraphicsSimpleTextItem,
 )
 
 
-_BASE_COLORS = [
+# Palette used by MainWindow to auto-assign colors to newly created objects.
+BASE_COLORS = [
     (255, 215, 0),
     (0, 170, 255),
     (255, 120, 0),
@@ -22,10 +24,8 @@ _BASE_COLORS = [
     (160, 100, 255),
 ]
 
-
-def color_for_obj(obj_id: int) -> QColor:
-    r, g, b = _BASE_COLORS[(max(0, obj_id - 1)) % len(_BASE_COLORS)]
-    return QColor(r, g, b)
+# Anchor priority for on-canvas object name labels: higher wins.
+_LABEL_KIND_RANK = {"point": 0, "polygon": 1, "box": 2}
 
 
 class ImageView(QGraphicsView):
@@ -54,21 +54,69 @@ class ImageView(QGraphicsView):
         self.box_items_by_obj: Dict[int, QGraphicsRectItem] = {}
         self.polygon_items_by_obj: Dict[int, QGraphicsPolygonItem] = {}
         self.point_items: List[Tuple[QGraphicsEllipseItem, int]] = []
+        self.label_items_by_obj: Dict[int, QGraphicsSimpleTextItem] = {}
+        self._label_kind: Dict[int, str] = {}
 
         self.on_add_point = None
         self.on_set_box = None
         self.on_remove_point = None
         self.get_current_obj_id = None
+        # Set by MainWindow so drawing reflects the user-managed object registry
+        # instead of a fixed formula.
+        self.get_object_color: Optional[Callable[[int], QColor]] = None
+        self.get_object_name: Optional[Callable[[int], str]] = None
 
     def set_image(self, pix: QPixmap):
         self.scene.clear()
         self.point_items.clear()
         self.polygon_items_by_obj.clear()
         self.box_items_by_obj.clear()
+        self.label_items_by_obj.clear()
+        self._label_kind.clear()
         self._temp_box_item = None
         self.pix_item = self.scene.addPixmap(pix)
         self.scene.setSceneRect(self.pix_item.boundingRect())
         self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    # ----- object color/name resolution -----
+    def _color_for(self, obj_id: int) -> QColor:
+        if callable(self.get_object_color):
+            color = self.get_object_color(int(obj_id))
+            if color is not None:
+                return color
+        r, g, b = BASE_COLORS[(max(0, int(obj_id) - 1)) % len(BASE_COLORS)]
+        return QColor(r, g, b)
+
+    def _name_for(self, obj_id: int) -> str:
+        if callable(self.get_object_name):
+            name = self.get_object_name(int(obj_id))
+            if name:
+                return name
+        return f"Object {obj_id}"
+
+    def _set_label(self, obj_id: int, x: float, y: float, kind: str):
+        obj_id = int(obj_id)
+        existing_kind = self._label_kind.get(obj_id)
+        if existing_kind is not None and _LABEL_KIND_RANK[existing_kind] > _LABEL_KIND_RANK[kind]:
+            return
+        self._remove_label(obj_id)
+        color = self._color_for(obj_id)
+        item = self.scene.addSimpleText(self._name_for(obj_id))
+        item.setBrush(QBrush(color))
+        item.setPos(x, y - 16)
+        item.setZValue(11)
+        self.label_items_by_obj[obj_id] = item
+        self._label_kind[obj_id] = kind
+
+    def _remove_label(self, obj_id: int):
+        obj_id = int(obj_id)
+        item = self.label_items_by_obj.pop(obj_id, None)
+        if item is not None:
+            try:
+                self.scene.removeItem(item)
+            except Exception:
+                pass
+        self._label_kind.pop(obj_id, None)
 
     def set_mode(self, mode: str):
         self.mode = mode
@@ -95,7 +143,7 @@ class ImageView(QGraphicsView):
     def add_point_visual(self, x: int, y: int, label: int, obj_id: int = 1):
         r = self.pointRadius
         fill = QColor(0, 200, 0) if label == 1 else QColor(255, 0, 0)
-        ring = color_for_obj(obj_id)
+        ring = self._color_for(obj_id)
         pen = QPen(ring, 2)
         item = self.scene.addEllipse(
             x - r, y - r, 2 * r, 2 * r,
@@ -109,6 +157,7 @@ class ImageView(QGraphicsView):
         item.setData(2, int(label))
         item.setData(3, int(obj_id))
         self.point_items.append((item, label))
+        self._set_label(obj_id, x, y, "point")
 
     def remove_point_visual(self, item: QGraphicsEllipseItem):
         try:
@@ -134,11 +183,12 @@ class ImageView(QGraphicsView):
                 self.scene.removeItem(prev)
             except Exception:
                 pass
-        color = color_for_obj(obj_id)
+        color = self._color_for(obj_id)
         pen = QPen(color, 2)
         box_item = self.scene.addRect(x, y, w, h, pen)
         box_item.setZValue(9)
         self.box_items_by_obj[int(obj_id)] = box_item
+        self._set_label(obj_id, x, y, "box")
 
     def remove_box_for_obj(self, obj_id: int):
         prev = self.box_items_by_obj.pop(int(obj_id), None)
@@ -147,13 +197,15 @@ class ImageView(QGraphicsView):
                 self.scene.removeItem(prev)
             except Exception:
                 pass
+        if self._label_kind.get(int(obj_id)) == "box":
+            self._remove_label(obj_id)
 
     # ----- polygons -----
     def add_polygon_visual(self, polygon_points: List[Tuple[int, int]], obj_id: int = 1):
         if not polygon_points:
             return
         self.remove_polygon_for_obj(obj_id)
-        color = color_for_obj(obj_id)
+        color = self._color_for(obj_id)
         poly = QPolygonF([QtCore.QPointF(int(x), int(y)) for x, y in polygon_points])
         pen = QPen(color)
         pen.setWidth(2)
@@ -163,6 +215,8 @@ class ImageView(QGraphicsView):
         item.setZValue(8)
         self.scene.addItem(item)
         self.polygon_items_by_obj[int(obj_id)] = item
+        top_point = min(polygon_points, key=lambda p: p[1])
+        self._set_label(obj_id, top_point[0], top_point[1], "polygon")
 
     def remove_polygon_for_obj(self, obj_id: int):
         prev = self.polygon_items_by_obj.pop(int(obj_id), None)
@@ -171,11 +225,14 @@ class ImageView(QGraphicsView):
                 self.scene.removeItem(prev)
             except Exception:
                 pass
+        if self._label_kind.get(int(obj_id)) == "polygon":
+            self._remove_label(obj_id)
 
     def remove_all_for_obj(self, obj_id: int):
         self.remove_points_for_obj(obj_id)
         self.remove_box_for_obj(obj_id)
         self.remove_polygon_for_obj(obj_id)
+        self._remove_label(obj_id)
 
     # ---------- mouse handling ----------
     def mousePressEvent(self, ev: QtGui.QMouseEvent):
@@ -206,8 +263,9 @@ class ImageView(QGraphicsView):
             label = 1 if ev.button() == Qt.MouseButton.LeftButton else 0
             if self.on_add_point:
                 self.on_add_point(x, y, label)
-            curr_obj = self.get_current_obj_id() if callable(self.get_current_obj_id) else 1
-            self.add_point_visual(x, y, label, obj_id=int(curr_obj))
+            curr_obj = self.get_current_obj_id() if callable(self.get_current_obj_id) else None
+            if curr_obj is not None:
+                self.add_point_visual(x, y, label, obj_id=int(curr_obj))
             ev.accept()
             return
 
@@ -238,8 +296,9 @@ class ImageView(QGraphicsView):
                 px, py = int(scene_pos.x()), int(scene_pos.y())
                 if self.on_add_point:
                     self.on_add_point(px, py, 1)
-                curr_obj = self.get_current_obj_id() if callable(self.get_current_obj_id) else 1
-                self.add_point_visual(px, py, 1, obj_id=int(curr_obj))
+                curr_obj = self.get_current_obj_id() if callable(self.get_current_obj_id) else None
+                if curr_obj is not None:
+                    self.add_point_visual(px, py, 1, obj_id=int(curr_obj))
             else:
                 if self.on_set_box:
                     self.on_set_box(x, y, w, h)

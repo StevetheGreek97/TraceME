@@ -1,23 +1,30 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Tuple
 
 from .types import Project, SCHEMA_VERSION, _now_iso
 
 
+def _atomic_write_json(path: Path, payload) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp_path, path)
+
+
 def create_project(root: Path, name: str) -> Project:
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     proj = Project(root=root, name=name)
-    proj.set_default_classes()
     proj.frames_root_abs().mkdir(parents=True, exist_ok=True)
     proj.annotations_path_abs().parent.mkdir(parents=True, exist_ok=True)
     save_project(proj)
     if not proj.annotations_path_abs().exists():
-        with open(proj.annotations_path_abs(), "w", encoding="utf-8") as f:
-            json.dump({"schema_version": 1, "annotations": []}, f, indent=2)
+        _atomic_write_json(proj.annotations_path_abs(), {"schema_version": 1, "annotations": []})
     return proj
 
 
@@ -39,12 +46,9 @@ def load_project(config_path: Path) -> Tuple[Project, str]:
 
     proj = Project.from_dict(root=root, data=data)
     proj.last_opened = _now_iso()
-    proj.set_default_classes()
     return proj, warning
 
 
 def save_project(project: Project) -> None:
     project.last_opened = _now_iso()
-    payload = project.to_dict()
-    with open(project.config_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    _atomic_write_json(project.config_path, project.to_dict())
