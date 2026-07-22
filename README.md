@@ -14,7 +14,7 @@ TraceME is a video tracking pipeline that runs SAM2 on frame sequences, produces
 
 ## Install (PyPI)
 ```
-pip install traceme
+pip install traceme-pipeline
 ```
 
 ### Checkpoints (Auto-Download)
