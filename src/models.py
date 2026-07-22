@@ -117,6 +117,13 @@ class AnnotationModel:
         obj.set_polygon(polygon)
         self.dirty = True
 
+    def set_polygon_at(self, fidx: int, obj_id: int, polygon: Optional[List[Tuple[int, int]]]):
+        """Set a polygon on an explicit frame, regardless of the current index.
+        Needed by async SAM2 results, which may arrive after navigation."""
+        obj = self._frame(int(fidx)).ensure_object(obj_id)
+        obj.set_polygon(polygon)
+        self.dirty = True
+
     def clear_object(self, obj_id: int):
         if self.index not in self.ann:
             return

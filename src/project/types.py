@@ -46,7 +46,6 @@ class Sam2Settings:
 class UIState:
     last_video_id: Optional[str] = None
     last_frame_index: int = 0
-    mode: str = "box"
     show_only_annotated: bool = False
     last_class: Optional[str] = None
     last_obj_id: int = 1
@@ -55,7 +54,6 @@ class UIState:
         return {
             "last_video_id": self.last_video_id,
             "last_frame_index": int(self.last_frame_index),
-            "mode": self.mode,
             "show_only_annotated": bool(self.show_only_annotated),
             "last_class": self.last_class,
             "last_obj_id": int(self.last_obj_id),
@@ -66,7 +64,6 @@ class UIState:
         return cls(
             last_video_id=data.get("last_video_id"),
             last_frame_index=int(data.get("last_frame_index", 0)),
-            mode=str(data.get("mode", "box")),
             show_only_annotated=bool(data.get("show_only_annotated", False)),
             last_class=data.get("last_class"),
             last_obj_id=int(data.get("last_obj_id", 1)),

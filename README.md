@@ -118,6 +118,9 @@ python -m src.traceme
 - Right click: add a negative point.
 - Ctrl+click a point: remove it.
 - Shift+drag: draw a bounding box.
+- Mouse wheel: zoom in/out.
+- Middle-mouse drag: pan a zoomed image.
+- F: fit the image to the window (zoom/pan is kept while stepping between frames).
 - Arrow keys: previous/next frame.
 - Home/End: first/last frame.
 - E: run SAM2 on the current object.

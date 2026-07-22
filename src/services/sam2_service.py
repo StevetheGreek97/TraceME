@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
+from PyQt6.QtCore import QThread, pyqtSignal
 
 try:
     import cv2
@@ -124,3 +125,84 @@ class Sam2Service:
         )
         mask = masks[0]
         return self._mask_to_polygon(mask)
+
+
+class Sam2InitThread(QThread):
+    """Builds a Sam2Service (model load included) off the UI thread."""
+
+    done = pyqtSignal(object)  # Sam2Service
+
+    def __init__(self, device: str, config_name: str, weights_path: str, parent=None):
+        super().__init__(parent)
+        self.device = device
+        self.config_name = config_name
+        self.weights_path = weights_path
+
+    def run(self):
+        self.done.emit(
+            Sam2Service(device=self.device, config_name=self.config_name, weights_path=self.weights_path)
+        )
+
+
+class Sam2PredictThread(QThread):
+    """Runs one SAM2 prediction off the UI thread.
+
+    `done` carries a dict with the launch context (video_id/frame_idx/obj_id
+    and the prompts used) plus the resulting polygon, so the receiver can
+    verify the annotation state hasn't changed before applying the mask.
+    """
+
+    done = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+
+    def __init__(
+        self,
+        service: Sam2Service,
+        image_path,
+        points_xy: List[Tuple[int, int]],
+        point_labels: List[int],
+        box_xywh: Optional[List[int]],
+        video_id: str,
+        frame_idx: int,
+        obj_id: int,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.service = service
+        self.image_path = Path(image_path)
+        self.points_xy = points_xy
+        self.point_labels = point_labels
+        self.box_xywh = box_xywh
+        self.video_id = video_id
+        self.frame_idx = int(frame_idx)
+        self.obj_id = int(obj_id)
+
+    def run(self):
+        try:
+            if cv2 is None:
+                self.failed.emit("OpenCV not available.")
+                return
+            img_bgr = cv2.imread(str(self.image_path))
+            if img_bgr is None:
+                self.failed.emit(f"Failed to read {self.image_path}")
+                return
+            img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            polygon = self.service.generate_polygon(
+                img,
+                points_xy=self.points_xy,
+                point_labels=self.point_labels,
+                box_xywh=self.box_xywh,
+            )
+            self.done.emit(
+                {
+                    "video_id": self.video_id,
+                    "frame_idx": self.frame_idx,
+                    "obj_id": self.obj_id,
+                    "points": self.points_xy,
+                    "labels": self.point_labels,
+                    "box": self.box_xywh,
+                    "polygon": polygon,
+                }
+            )
+        except Exception as e:
+            self.failed.emit(str(e))

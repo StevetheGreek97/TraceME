@@ -7,7 +7,7 @@ SAM2_URL ?= https://huggingface.co/facebook/sam2-hiera-tiny/resolve/main/sam2_hi
 SAM2_WEIGHTS ?= src/sam2_configs/sam2_hiera_tiny.pt
 SAM2_SHA256 ?=
 
-.PHONY: help venv install install-full sam2-weights run clean
+.PHONY: help venv install install-full sam2-weights run test clean
 
 help:
 	@echo "Targets:"
@@ -16,6 +16,7 @@ help:
 	@echo "  make install-full  Install core + optional extras (sam2, yaml)"
 	@echo "  make sam2-weights  Download SAM2 weights to src/sam2_configs/"
 	@echo "  make run           Launch TraceME"
+	@echo "  make test          Run the test suite"
 	@echo "  make clean         Remove build and cache artifacts"
 
 venv:
@@ -57,6 +58,9 @@ $(SAM2_WEIGHTS):
 
 run:
 	$(PY) -m src.traceme
+
+test:
+	pytest -q
 
 clean:
 	rm -rf $(VENV) build dist *.egg-info .pytest_cache __pycache__

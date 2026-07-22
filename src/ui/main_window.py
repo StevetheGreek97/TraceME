@@ -5,10 +5,6 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
-try:
-    import cv2
-except Exception:
-    cv2 = None
 from PyQt6 import QtGui
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut, QPixmap, QColor, QIcon
@@ -21,6 +17,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QProgressBar,
@@ -39,7 +36,7 @@ from PyQt6.QtWidgets import (
 from src.models import AnnotationModel, load_annotations, save_annotations, export_yaml
 from src.project.store import create_project, load_project, save_project
 from src.project.types import ClassLabel, Project, VideoItem
-from src.services.sam2_service import Sam2Service
+from src.services.sam2_service import Sam2Service, Sam2InitThread, Sam2PredictThread
 from src.services.video_importer import VideoImportThread, VideoImportResult, has_ffmpeg, VIDEO_EXTS
 from src.ui.image_view import BASE_COLORS, ImageView
 
@@ -56,6 +53,12 @@ class MainWindow(QMainWindow):
         self.current_video_id: Optional[str] = None
         self.sam2: Optional[Sam2Service] = None
         self._import_thread: Optional[VideoImportThread] = None
+        self._sam2_init_thread: Optional[Sam2InitThread] = None
+        self._sam2_predict_thread: Optional[Sam2PredictThread] = None
+        self._sam2_gen = 0
+        # frame_idx -> row in frame_list; rebuilt with the list so frame
+        # navigation stays O(1) instead of scanning every row.
+        self._row_by_frame: Dict[int, int] = {}
 
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
@@ -86,24 +89,24 @@ class MainWindow(QMainWindow):
         self.video_tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
         left_v.addWidget(self.video_tree, 1)
 
-        left_v.addWidget(QLabel("Objects"))
-        self.objects_list = QListWidget()
-        self.objects_list.itemSelectionChanged.connect(self._on_object_selection_changed)
-        left_v.addWidget(self.objects_list, 1)
-
-        objects_btn_row = QHBoxLayout()
-        self.btn_add_object = QPushButton("+ Add")
-        self.btn_rename_object = QPushButton("Rename")
-        self.btn_recolor_object = QPushButton("Recolor")
-        self.btn_delete_object = QPushButton("Delete")
-        for b in (self.btn_add_object, self.btn_rename_object, self.btn_recolor_object, self.btn_delete_object):
-            objects_btn_row.addWidget(b)
-        left_v.addLayout(objects_btn_row)
-
+        objects_header = QHBoxLayout()
+        objects_header.addWidget(QLabel("Objects"))
+        objects_header.addStretch(1)
+        self.btn_add_object = QPushButton("+")
+        self.btn_add_object.setFixedSize(24, 24)
+        self.btn_add_object.setToolTip("Add object")
         self.btn_add_object.clicked.connect(self.action_add_object)
-        self.btn_rename_object.clicked.connect(self.action_rename_object)
-        self.btn_recolor_object.clicked.connect(self.action_recolor_object)
-        self.btn_delete_object.clicked.connect(self.action_delete_object)
+        objects_header.addWidget(self.btn_add_object)
+        left_v.addLayout(objects_header)
+
+        self.objects_list = QListWidget()
+        self.objects_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.objects_list.customContextMenuRequested.connect(self._show_objects_menu)
+        self.objects_list.itemDoubleClicked.connect(lambda _item: self.action_rename_object())
+        delete_sc = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.objects_list)
+        delete_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        delete_sc.activated.connect(self.action_delete_object)
+        left_v.addWidget(self.objects_list, 1)
 
         splitter.addWidget(left)
 
@@ -214,6 +217,10 @@ class MainWindow(QMainWindow):
         add_shortcut("End", lambda: self.load_frame(self.current_frame_count() - 1))
         add_shortcut("E", self.run_sam2)
         add_shortcut("D", self.clear_mask_for_current)
+        add_shortcut("F", lambda: self.view.fit_to_view())
+        add_shortcut("+", lambda: self.view.zoom_in())
+        add_shortcut("=", lambda: self.view.zoom_in())
+        add_shortcut("-", lambda: self.view.zoom_out())
 
     # ---------------- Project lifecycle ----------------
     def action_new_project(self):
@@ -254,13 +261,18 @@ class MainWindow(QMainWindow):
         self.project_label.setText(f"Project: {project.name}")
         project.frames_root_abs().mkdir(parents=True, exist_ok=True)
 
-        self.sam2 = Sam2Service(
-            device="cuda",
-            config_name=project.sam2.config_name,
-            weights_path=project.sam2.weights_path,
+        # Load the SAM2 model in the background so opening a project stays snappy.
+        self.sam2 = None
+        self._sam2_gen += 1
+        gen = self._sam2_gen
+        init_thread = Sam2InitThread(
+            "cuda", project.sam2.config_name, project.sam2.weights_path, parent=self
         )
-        if not self.sam2.available:
-            self.status.showMessage(f"SAM2 disabled: {self.sam2.error}")
+        init_thread.done.connect(lambda svc, g=gen: self._on_sam2_ready(svc, g))
+        init_thread.finished.connect(init_thread.deleteLater)
+        self._sam2_init_thread = init_thread
+        init_thread.start()
+        self.status.showMessage("Loading SAM2 model in the background...")
 
         # load annotations
         records_by_video = load_annotations(project.annotations_path_abs())
@@ -278,6 +290,16 @@ class MainWindow(QMainWindow):
         self._refresh_video_tree(select_id=project.ui_state.last_video_id)
         self._set_project_enabled(True)
         self.apply_ui_state()
+
+    def _on_sam2_ready(self, service: Sam2Service, gen: int):
+        if gen != self._sam2_gen:
+            return  # superseded by a newer project load
+        self._sam2_init_thread = None
+        self.sam2 = service
+        if service.available:
+            self.status.showMessage("SAM2 ready.")
+        else:
+            self.status.showMessage(f"SAM2 disabled: {service.error}")
 
     def _migrate_legacy_objects(self):
         """Backfill an object registry entry for any obj_id already used in
@@ -311,7 +333,6 @@ class MainWindow(QMainWindow):
         state = self.project.ui_state
         state.last_video_id = self.current_video_id
         state.last_frame_index = self.current_index()
-        state.mode = self.view.mode
         state.show_only_annotated = self.btn_toggle_annotated.isChecked()
         oid = self.current_obj_id()
         if oid is not None:
@@ -322,7 +343,6 @@ class MainWindow(QMainWindow):
             return
         state = self.project.ui_state
         self._refresh_objects_list(select_obj_id=state.last_obj_id)
-        self.set_mode(state.mode or "box")
         self.btn_toggle_annotated.setChecked(state.show_only_annotated)
 
         if state.last_video_id and state.last_video_id in self.models:
@@ -411,10 +431,6 @@ class MainWindow(QMainWindow):
             self.btn_toggle_annotated,
         ]:
             w.setEnabled(enabled)
-        if not enabled:
-            self.btn_rename_object.setEnabled(False)
-            self.btn_recolor_object.setEnabled(False)
-            self.btn_delete_object.setEnabled(False)
         self.content_splitter.setVisible(enabled)
         self.empty_panel.setVisible(not enabled)
         self.act_save_project.setEnabled(enabled)
@@ -521,7 +537,6 @@ class MainWindow(QMainWindow):
         selected = self._select_object_by_id(select_obj_id) if select_obj_id is not None else False
         if not selected and self.objects_list.count():
             self.objects_list.setCurrentRow(0)
-        self._on_object_selection_changed()
 
     def _select_object_by_id(self, obj_id: int) -> bool:
         for row in range(self.objects_list.count()):
@@ -531,11 +546,31 @@ class MainWindow(QMainWindow):
                 return True
         return False
 
-    def _on_object_selection_changed(self):
-        has_selection = self.current_obj_id() is not None
-        self.btn_rename_object.setEnabled(has_selection)
-        self.btn_recolor_object.setEnabled(has_selection)
-        self.btn_delete_object.setEnabled(has_selection)
+    def _show_objects_menu(self, pos):
+        if not self.project:
+            return
+        item = self.objects_list.itemAt(pos)
+        menu = QMenu(self.objects_list)
+        act_add = menu.addAction("Add object...")
+        act_rename = act_recolor = act_delete = None
+        if item is not None:
+            self.objects_list.setCurrentItem(item)
+            menu.addSeparator()
+            act_rename = menu.addAction("Rename...")
+            act_recolor = menu.addAction("Recolor...")
+            menu.addSeparator()
+            act_delete = menu.addAction("Delete")
+        chosen = menu.exec(self.objects_list.mapToGlobal(pos))
+        if chosen is None:
+            return
+        if chosen is act_add:
+            self.action_add_object()
+        elif chosen is act_rename:
+            self.action_rename_object()
+        elif chosen is act_recolor:
+            self.action_recolor_object()
+        elif chosen is act_delete:
+            self.action_delete_object()
 
     # ---------------- Object management ----------------
     def action_add_object(self):
@@ -708,6 +743,7 @@ class MainWindow(QMainWindow):
             return
         self.frame_list.blockSignals(True)
         self.frame_list.clear()
+        self._row_by_frame.clear()
         show_only = self.btn_toggle_annotated.isChecked()
         for idx, p in enumerate(model.frames):
             annotated = model.is_frame_annotated(idx)
@@ -719,6 +755,7 @@ class MainWindow(QMainWindow):
                 item.setForeground(QtGui.QBrush(QtGui.QColor(120, 120, 120)))
             item.setData(Qt.ItemDataRole.UserRole, idx)
             item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+            self._row_by_frame[idx] = self.frame_list.count()
             self.frame_list.addItem(item)
         self.frame_list.blockSignals(False)
         row = self.visible_index_from_frame_index(model.index)
@@ -726,11 +763,7 @@ class MainWindow(QMainWindow):
             self.frame_list.setCurrentRow(row)
 
     def visible_index_from_frame_index(self, frame_idx: int) -> Optional[int]:
-        for row in range(self.frame_list.count()):
-            it = self.frame_list.item(row)
-            if it.data(Qt.ItemDataRole.UserRole) == frame_idx:
-                return row
-        return None
+        return self._row_by_frame.get(frame_idx)
 
     def refresh_list_item(self, fidx: int):
         row = self.visible_index_from_frame_index(fidx)
@@ -810,11 +843,17 @@ class MainWindow(QMainWindow):
         if oid is None:
             self.status.showMessage("Add an object to track first.")
             return
-        if not self.sam2 or not self.sam2.available:
-            self.status.showMessage(f"SAM2 unavailable: {self.sam2.error if self.sam2 else 'not initialized'}")
+        if self._sam2_predict_thread is not None:
+            self.status.showMessage("SAM2 is already running; wait for it to finish.")
             return
-        if cv2 is None:
-            self.status.showMessage("OpenCV not available; SAM2 disabled.")
+        if self.sam2 is None:
+            if self._sam2_init_thread is not None:
+                self.status.showMessage("SAM2 model is still loading; try again in a moment.")
+            else:
+                self.status.showMessage("SAM2 unavailable: not initialized")
+            return
+        if not self.sam2.available:
+            self.status.showMessage(f"SAM2 unavailable: {self.sam2.error}")
             return
         fidx = model.index
         obj = model.get_object(fidx, oid)
@@ -824,33 +863,55 @@ class MainWindow(QMainWindow):
             self.status.showMessage("Add points or a box before running SAM2.")
             return
 
-        img_path = model.frames[fidx]
-        img_bgr = cv2.imread(str(img_path))
-        if img_bgr is None:
-            self.status.showMessage(f"Failed to read {img_path}")
-            return
-        img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-
-        poly = self.sam2.generate_polygon(
-            img,
-            points_xy=[(int(x), int(y)) for x, y in obj.points],
-            point_labels=[int(v) for v in obj.labels],
-            box_xywh=list(obj.box) if obj.box else None,
+        thread = Sam2PredictThread(
+            self.sam2,
+            model.frames[fidx],
+            [(int(x), int(y)) for x, y in obj.points],
+            [int(v) for v in obj.labels],
+            list(obj.box) if obj.box else None,
+            self.current_video_id,
+            fidx,
+            int(oid),
+            parent=self,
         )
+        thread.done.connect(self._on_sam2_result)
+        thread.failed.connect(self._on_sam2_failed)
+        thread.finished.connect(thread.deleteLater)
+        self._sam2_predict_thread = thread
+        thread.start()
+        self.status.showMessage("Running SAM2...")
+
+    def _on_sam2_result(self, res: dict):
+        self._sam2_predict_thread = None
+        video_id = res["video_id"]
+        fidx = int(res["frame_idx"])
+        oid = int(res["obj_id"])
+        model = self.models.get(video_id)
+        if not model:
+            return
+        obj = model.get_object(fidx, oid)
+        launched_box = res["box"]
+        current_box = list(obj.box) if (obj and obj.box) else None
+        if obj is None or obj.points != res["points"] or obj.labels != res["labels"] or current_box != launched_box:
+            self.status.showMessage("Annotations changed while SAM2 was running; mask discarded. Press E again.")
+            return
+        poly = res["polygon"]
         if not poly:
             self.status.showMessage("SAM2 returned an empty mask.")
             return
-        model.set_polygon(oid, poly)
-        self.view.add_polygon_visual(poly, obj_id=oid)
-        self.refresh_list_item(fidx)
+        model.set_polygon_at(fidx, oid, poly)
+        if video_id == self.current_video_id:
+            if model.index == fidx:
+                self.view.add_polygon_visual(poly, obj_id=oid)
+            self.refresh_list_item(fidx)
         self.mark_dirty()
+        self.status.showMessage("SAM2 mask ready.")
 
-    # ---------- modes / state ----------
-    def set_mode(self, mode: str):
-        self.view.set_mode(mode)
-        self.status.showMessage(f"Mode: {mode}")
-        self.mark_dirty()
+    def _on_sam2_failed(self, message: str):
+        self._sam2_predict_thread = None
+        self.status.showMessage(f"SAM2 failed: {message}")
 
+    # ---------- state ----------
     def mark_dirty(self):
         if not self.project:
             return
@@ -908,25 +969,30 @@ class MainWindow(QMainWindow):
             "Navigation\n"
             "- Right/Left arrows: next/previous frame.\n"
             "- Home/End: first/last frame.\n"
-            "- Slider or frame list: jump to a frame.\n\n"
+            "- Slider or frame list: jump to a frame.\n"
+            "- Mouse wheel: zoom in/out.\n"
+            "- Middle-mouse drag: pan around a zoomed image.\n"
+            "- F: fit the image to the window.\n"
+            "- Your zoom/pan is kept while stepping between frames;\n"
+            "  press F to reset it.\n\n"
             "Objects\n"
             "- Objects panel: manage the things you're tracking, each with its\n"
             "  own name and color, shared across every video in the project.\n"
-            "- + Add creates a new object with an auto-assigned color.\n"
-            "- Rename / Recolor change the selected object.\n"
-            "- Delete permanently removes the selected object and ALL of its\n"
-            "  annotations across every frame and video (cannot be undone; its\n"
-            "  id is never reused).\n"
+            "- The + button (or right-click > Add object) creates a new object\n"
+            "  with an auto-assigned color.\n"
+            "- Double-click an object to rename it.\n"
+            "- Right-click an object for Rename / Recolor / Delete.\n"
+            "- Delete (menu or Del key) permanently removes the object and ALL\n"
+            "  of its annotations across every frame and video (cannot be\n"
+            "  undone; its id is never reused).\n"
             "- The selected object in the list is the one you're annotating.\n"
             "  Its name and color are shown on the canvas next to whatever\n"
             "  you draw for it.\n\n"
             "Annotation Basics\n"
-            "- Point mode (default):\n"
-            "  - Left-click: positive point.\n"
-            "  - Right-click: negative point.\n"
-            "  - Ctrl-click a point: remove it.\n"
-            "- Box override:\n"
-            "  - Hold Shift and drag with left mouse to draw a box.\n"
+            "- Left-click: positive point.\n"
+            "- Right-click: negative point.\n"
+            "- Ctrl-click a point: remove it.\n"
+            "- Hold Shift and drag with left mouse to draw a box.\n"
             "- Editing an object's points/box after a mask exists clears that\n"
             "  mask automatically, since it no longer matches - press E again\n"
             "  to regenerate it.\n\n"
@@ -952,6 +1018,14 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def closeEvent(self, event: QtGui.QCloseEvent):
+        for t in (self._sam2_init_thread, self._sam2_predict_thread, self._import_thread):
+            if t is None:
+                continue
+            try:
+                if t.isRunning():
+                    t.wait(10000)
+            except RuntimeError:
+                pass  # thread object already deleted
         try:
             self.save_current_project()
         except Exception:

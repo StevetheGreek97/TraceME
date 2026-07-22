@@ -6,6 +6,7 @@ from PyQt6 import QtCore, QtGui
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QPen, QColor, QPolygonF, QBrush
 from PyQt6.QtWidgets import (
+    QApplication,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
     QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPolygonItem,
     QGraphicsSimpleTextItem,
@@ -30,6 +31,8 @@ _LABEL_KIND_RANK = {"point": 0, "polygon": 1, "box": 2}
 
 class ImageView(QGraphicsView):
     pointRadius = 4
+    MIN_SCALE = 0.02
+    MAX_SCALE = 100.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -46,10 +49,11 @@ class ImageView(QGraphicsView):
 
         self.pix_item: Optional[QGraphicsPixmapItem] = None
 
-        self.mode = "box"  # "box" | "point"
         self._box_start: Optional[QtCore.QPointF] = None
         self._temp_box_item: Optional[QGraphicsRectItem] = None
         self._box_override_active = False
+        self._user_zoomed = False
+        self._pan_last: Optional[QtCore.QPoint] = None
 
         self.box_items_by_obj: Dict[int, QGraphicsRectItem] = {}
         self.polygon_items_by_obj: Dict[int, QGraphicsPolygonItem] = {}
@@ -67,6 +71,13 @@ class ImageView(QGraphicsView):
         self.get_object_name: Optional[Callable[[int], str]] = None
 
     def set_image(self, pix: QPixmap):
+        # Keep the user's zoom/pan when swapping between same-size frames so
+        # stepping through a video doesn't lose the region they're working on.
+        keep_view = (
+            self._user_zoomed
+            and self.pix_item is not None
+            and self.pix_item.pixmap().size() == pix.size()
+        )
         self.scene.clear()
         self.point_items.clear()
         self.polygon_items_by_obj.clear()
@@ -76,7 +87,19 @@ class ImageView(QGraphicsView):
         self._temp_box_item = None
         self.pix_item = self.scene.addPixmap(pix)
         self.scene.setSceneRect(self.pix_item.boundingRect())
+        if not keep_view:
+            self.fit_to_view()
+
+    def fit_to_view(self):
+        if self.pix_item is None:
+            return
+        self._user_zoomed = False
         self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def resizeEvent(self, ev: QtGui.QResizeEvent):
+        super().resizeEvent(ev)
+        if self.pix_item is not None and not self._user_zoomed:
+            self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     # ----- object color/name resolution -----
     def _color_for(self, obj_id: int) -> QColor:
@@ -118,9 +141,6 @@ class ImageView(QGraphicsView):
                 pass
         self._label_kind.pop(obj_id, None)
 
-    def set_mode(self, mode: str):
-        self.mode = mode
-
     def _start_box(self, scene_pos: QtCore.QPointF):
         x, y = int(scene_pos.x()), int(scene_pos.y())
         self._box_start = scene_pos
@@ -135,9 +155,30 @@ class ImageView(QGraphicsView):
         rect_item.setZValue(9)
         self._temp_box_item = rect_item
 
+    def _apply_zoom(self, factor: float, anchor: Optional[QGraphicsView.ViewportAnchor] = None):
+        if self.pix_item is None:
+            return
+        new_scale = self.transform().m11() * factor
+        if not (self.MIN_SCALE <= new_scale <= self.MAX_SCALE):
+            return
+        self._user_zoomed = True
+        if anchor is None:
+            self.scale(factor, factor)
+            return
+        prev = self.transformationAnchor()
+        self.setTransformationAnchor(anchor)
+        self.scale(factor, factor)
+        self.setTransformationAnchor(prev)
+
+    def zoom_in(self):
+        self._apply_zoom(self.zoom_factor, QGraphicsView.ViewportAnchor.AnchorViewCenter)
+
+    def zoom_out(self):
+        self._apply_zoom(1 / self.zoom_factor, QGraphicsView.ViewportAnchor.AnchorViewCenter)
+
     def wheelEvent(self, event: QtGui.QWheelEvent):
         zoom = self.zoom_factor if event.angleDelta().y() > 0 else 1 / self.zoom_factor
-        self.scale(zoom, zoom)
+        self._apply_zoom(zoom)
 
     # ----- points -----
     def add_point_visual(self, x: int, y: int, label: int, obj_id: int = 1):
@@ -238,6 +279,15 @@ class ImageView(QGraphicsView):
     def mousePressEvent(self, ev: QtGui.QMouseEvent):
         if not self.pix_item:
             return
+        if ev.button() == Qt.MouseButton.MiddleButton:
+            # Override cursor, not view/viewport cursor: QGraphicsView caches and
+            # restores the viewport cursor around items that set their own (the
+            # point markers), which can resurrect a widget-level pan cursor later.
+            if self._pan_last is None:
+                QApplication.setOverrideCursor(Qt.CursorShape.ClosedHandCursor)
+            self._pan_last = ev.pos()
+            ev.accept()
+            return
         scene_pos = self.mapToScene(ev.pos())
         x, y = int(scene_pos.x()), int(scene_pos.y())
 
@@ -272,6 +322,13 @@ class ImageView(QGraphicsView):
         super().mousePressEvent(ev)
 
     def mouseMoveEvent(self, ev: QtGui.QMouseEvent):
+        if self._pan_last is not None:
+            delta = ev.pos() - self._pan_last
+            self._pan_last = ev.pos()
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            ev.accept()
+            return
         if self._box_start is not None and self._temp_box_item is not None:
             scene_pos = self.mapToScene(ev.pos())
             x0, y0 = self._box_start.x(), self._box_start.y()
@@ -282,6 +339,11 @@ class ImageView(QGraphicsView):
         super().mouseMoveEvent(ev)
 
     def mouseReleaseEvent(self, ev: QtGui.QMouseEvent):
+        if ev.button() == Qt.MouseButton.MiddleButton and self._pan_last is not None:
+            self._pan_last = None
+            QApplication.restoreOverrideCursor()
+            ev.accept()
+            return
         if self._box_start is not None and self._temp_box_item is not None:
             rectf = self._temp_box_item.rect()
             x, y, w, h = int(rectf.x()), int(rectf.y()), int(rectf.width()), int(rectf.height())
