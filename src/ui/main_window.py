@@ -49,7 +49,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("TraceWave")
+        self.setWindowTitle("TraceME")
 
         self.project: Optional[Project] = None
         self.models: Dict[str, AnnotationModel] = {}
@@ -196,7 +196,7 @@ class MainWindow(QMainWindow):
         self.act_export_yaml.triggered.connect(self.action_export_yaml)
 
         help_menu = self.menuBar().addMenu("Help")
-        self.act_help = help_menu.addAction("How to Use TraceWave")
+        self.act_help = help_menu.addAction("How to Use TraceME")
         self.act_help.triggered.connect(self.show_help)
 
     def _wire_shortcuts(self):
@@ -664,7 +664,7 @@ class MainWindow(QMainWindow):
             return
         self.view.set_image(pix)
         self.redraw_annotations_for_current()
-        self.setWindowTitle(f"TraceWave - {img_path.name} [{i + 1}/{len(model.frames)}]")
+        self.setWindowTitle(f"TraceME - {img_path.name} [{i + 1}/{len(model.frames)}]")
 
         # sync slider
         if self.slider.maximum() != len(model.frames) - 1:
@@ -893,7 +893,7 @@ class MainWindow(QMainWindow):
 
     def show_help(self):
         dlg = QDialog(self)
-        dlg.setWindowTitle("TraceWave Help")
+        dlg.setWindowTitle("TraceME Help")
         dlg.setModal(True)
         layout = QVBoxLayout(dlg)
 

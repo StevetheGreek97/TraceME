@@ -98,7 +98,7 @@ fi
 
 if [[ "$ENV_MODE" == "conda" && -z "${CONDA_PREFIX:-}" ]]; then
   echo "Error: --conda requires an active conda env."
-  echo "Example: conda create -n tracewave python=3.10 && conda activate tracewave"
+  echo "Example: conda create -n traceme python=3.10 && conda activate traceme"
   exit 1
 fi
 
@@ -242,4 +242,4 @@ elif [[ "$ENV_MODE" == "conda" ]]; then
 else
   echo "Using system/active Python: $PYTHON"
 fi
-echo "Run with: ${PY_CMD[*]} -m src.tracewave"
+echo "Run with: ${PY_CMD[*]} -m src.traceme"

@@ -129,7 +129,7 @@ if not exist "%SAM2_WEIGHTS%" (
 
 echo Done.
 echo Activate with: %VENV%\Scripts\activate.bat
-echo Run with: %VENV%\Scripts\python.exe -m src.tracewave
+echo Run with: %VENV%\Scripts\python.exe -m src.traceme
 exit /b 0
 
 :download_ffmpeg

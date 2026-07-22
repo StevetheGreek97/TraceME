@@ -70,4 +70,4 @@ if [[ -z "$PYTHON" ]] || ([[ "$PYTHON" != "py" ]] && ! python_exists "$PYTHON");
   exit 1
 fi
 
-exec "$PYTHON" "${PY_LAUNCHER_ARGS[@]}" -m src.tracewave
+exec "$PYTHON" "${PY_LAUNCHER_ARGS[@]}" -m src.traceme

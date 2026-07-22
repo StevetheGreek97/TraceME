@@ -22,4 +22,4 @@ if not exist "%PY%" (
   exit /b 1
 )
 
-"%PY%" -m src.tracewave
+"%PY%" -m src.traceme

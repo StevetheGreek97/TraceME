@@ -15,7 +15,7 @@ help:
 	@echo "  make install       Install core dependencies in the venv"
 	@echo "  make install-full  Install core + optional extras (sam2, yaml)"
 	@echo "  make sam2-weights  Download SAM2 weights to src/sam2_configs/"
-	@echo "  make run           Launch TraceWave"
+	@echo "  make run           Launch TraceME"
 	@echo "  make clean         Remove build and cache artifacts"
 
 venv:
@@ -56,7 +56,7 @@ $(SAM2_WEIGHTS):
 	fi
 
 run:
-	$(PY) -m src.tracewave
+	$(PY) -m src.traceme
 
 clean:
 	rm -rf $(VENV) build dist *.egg-info .pytest_cache __pycache__

@@ -1,6 +1,6 @@
-# TraceWave
+# TraceME
 
-TraceWave is a desktop app for annotating video frames with points, boxes, and polygons, with SAM2-assisted segmentation. It turns videos into frame sequences, organizes work into projects, autosaves your state, and exports per-video YAML prompts for downstream pipelines.
+TraceME is a desktop app for annotating video frames with points, boxes, and polygons, with SAM2-assisted segmentation. It turns videos into frame sequences, organizes work into projects, autosaves your state, and exports per-video YAML prompts for downstream pipelines.
 
 **Highlights**
 - Project-based workflow with autosave and resume state.
@@ -60,7 +60,7 @@ make sam2-weights
 Launch:
 
 ```bash
-python -m src.tracewave
+python -m src.traceme
 ```
 
 **Conda Install (Windows/macOS/Linux)**
@@ -69,8 +69,8 @@ Note: the `sam2` package is not available on conda channels, so you must use pip
 inside the conda env (or omit the `sam2` extra).
 
 ```bash
-conda create -n tracewave python=3.10 -y
-conda activate tracewave
+conda create -n traceme python=3.10 -y
+conda activate traceme
 conda install -c conda-forge ffmpeg -y
 python -m pip install --upgrade pip
 python -m pip install -e ".[sam2,yaml]"
@@ -91,7 +91,7 @@ python -c "import urllib.request; urllib.request.urlretrieve('https://huggingfac
 Run:
 
 ```bash
-python -m src.tracewave
+python -m src.traceme
 ```
 
 **What Gets Installed**
@@ -104,7 +104,7 @@ python -m src.tracewave
 - `./run.sh` uses `.venv/bin/python` by default, or an active conda env if present.
 - Windows: `run.bat` uses `.venv\Scripts\python.exe`.
 - You can override with `PYTHON=/path/to/python ./run.sh`.
-- You can also run directly with `python -m src.tracewave`.
+- You can also run directly with `python -m src.traceme`.
 
 **Using the App**
 1. File > New Project (or Open Project).
@@ -141,7 +141,7 @@ my_project/
 - Exported YAML contains a `prompts` list with `frame_idx`, `obj_id`, `points`, `labels`, and optional `box` or `polygon` fields.
 
 **SAM2 Configuration**
-TraceWave reads SAM2 settings from each project’s `project.json` under the `sam2` key.
+TraceME reads SAM2 settings from each project’s `project.json` under the `sam2` key.
 
 Fields:
 - `config_name`: SAM2 config name or path.
