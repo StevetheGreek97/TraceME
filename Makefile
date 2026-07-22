@@ -97,7 +97,9 @@ release: ## Bump version, commit, tag, and push (VERSION required). Example: mak
 	fi
 	@sed -i.bak 's/^version = ".*"/version = "$(VERSION)"/' pyproject.toml && rm -f pyproject.toml.bak
 	@git add pyproject.toml
-	@git commit -m "Release v$(VERSION)"
+	@if ! git diff --cached --quiet; then \
+		git commit -m "Release v$(VERSION)"; \
+	fi
 	@git tag "v$(VERSION)"
 	@git push
 	@git push --tags
