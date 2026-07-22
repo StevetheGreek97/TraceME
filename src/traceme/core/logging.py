@@ -92,7 +92,7 @@ def clear_log_context() -> None:
     _LOG_CONTEXT.set({})
 
 
-def get_logger(name: str = "tracewave", level: str | int | None = None) -> logging.Logger:
+def get_logger(name: str = "traceme", level: str | int | None = None) -> logging.Logger:
     """
     Get a configured logger (idempotent). Uses root handlers.
     """

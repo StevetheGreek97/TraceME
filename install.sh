@@ -71,4 +71,4 @@ fi
 
 echo "==> Done."
 echo "Activate with: source $VENV_DIR/bin/activate"
-echo "Run with: tracewave -i /path/to/frames -o /path/to/output -p /path/to/prompts.yaml"
+echo "Run with: traceme -i /path/to/frames -o /path/to/output -p /path/to/prompts.yaml"

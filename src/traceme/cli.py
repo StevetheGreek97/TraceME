@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tracewave.pipeline import cli_main
+from traceme.pipeline import cli_main
 
 
 def main() -> None:

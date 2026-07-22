@@ -4,14 +4,15 @@ import shutil
 
 import pandas as pd
 
-from tracewave.core.logging import get_logger
+from traceme.core.logging import get_logger
+from traceme.video.chunker import numeric_sort_key
 
 try:
     import imageio_ffmpeg
 except Exception:  # pragma: no cover - optional dependency
     imageio_ffmpeg = None
 
-log = get_logger("tracewave.video.merge")
+log = get_logger("traceme.video.merge")
 
 
 def _handle_single_file(files: list[Path], output: Path, kind: str) -> bool:
@@ -46,7 +47,7 @@ def merge_csv_chunks(input_dir: Path, output_csv: Path) -> None:
     Merges chunk_*.csv files into one combined CSV named after frame_dir.
     If only one CSV exists, it is simply renamed to match the frame_dir name.
     """
-    csv_files = sorted(input_dir.glob("*.csv"))
+    csv_files = sorted(input_dir.glob("*.csv"), key=numeric_sort_key)
     if not csv_files:
         log.warning(f"No chunk_*.csv files found in {input_dir}")
         return
@@ -58,9 +59,7 @@ def merge_csv_chunks(input_dir: Path, output_csv: Path) -> None:
     # Otherwise, merge multiple CSVs
     log.info(f"Merging {len(csv_files)} CSV files...")
 
-    seen_frames = set()
-    merged_rows = []
-
+    frames = []
     for csv_file in csv_files:
         try:
             df = pd.read_csv(csv_file)
@@ -71,25 +70,39 @@ def merge_csv_chunks(input_dir: Path, output_csv: Path) -> None:
         if "global_frame_idx" not in df.columns:
             log.error(f"{csv_file} missing 'global_frame_idx'; skipping.")
             continue
+        if "obj_id" not in df.columns:
+            log.error(f"{csv_file} missing 'obj_id'; skipping.")
+            continue
 
-        for _, row in df.iterrows():
-            try:
-                gidx = int(row["global_frame_idx"])
-            except Exception:
-                continue
-            if gidx not in seen_frames:
-                merged_rows.append(row)
-                seen_frames.add(gidx)
+        frames.append(df)
 
-    if not merged_rows:
+    if not frames:
         log.warning("No valid rows found during merge; not writing merged file.")
         return
 
-    merged_df = pd.DataFrame(merged_rows)
-    merged_df = merged_df.sort_values("global_frame_idx").reset_index(drop=True)
+    merged_df = pd.concat(frames, ignore_index=True)
+    # Dedup per (frame, object): boundary frames are duplicated across adjacent
+    # chunks, and each frame can hold multiple tracked objects. `keep="first"`
+    # preserves the earlier chunk's row, matching the previous single-row
+    # dedup behavior. pandas treats NaN obj_id (frames with no objects) as
+    # equal to itself here, so those still dedup correctly too.
+    merged_df = merged_df.drop_duplicates(subset=["global_frame_idx", "obj_id"], keep="first")
+    merged_df = merged_df.sort_values(["global_frame_idx", "obj_id"]).reset_index(drop=True)
+
+    # A blank obj_id on any row forces that whole column to float64 on read;
+    # restore clean integer formatting instead of "500.0" everywhere.
+    for col in ("chunk_id", "global_frame_idx", "in_chunk_idx", "area_px"):
+        if col in merged_df.columns:
+            merged_df[col] = merged_df[col].astype("int64")
+    if "obj_id" in merged_df.columns:
+        merged_df["obj_id"] = merged_df["obj_id"].astype("Int64")
+
     merged_df.to_csv(output_csv, index=False)
 
-    log.info(f"[OK] Merged {len(csv_files)} chunk files → {output_csv.name} ({len(merged_df)} unique frames)")
+    log.info(
+        f"[OK] Merged {len(csv_files)} chunk files → {output_csv.name} "
+        f"({len(merged_df)} rows, {merged_df['global_frame_idx'].nunique()} unique frames)"
+    )
 
 
 def merge_chunk_videos(input_dir: Path, output_file: Path) -> None:
@@ -98,7 +111,7 @@ def merge_chunk_videos(input_dir: Path, output_file: Path) -> None:
     Uses system ffmpeg if available; otherwise tries imageio-ffmpeg.
     If only one MP4 exists, it is renamed to `output_file`.
     """
-    mp4_files = sorted(input_dir.glob("*.mp4"))
+    mp4_files = sorted(input_dir.glob("*.mp4"), key=numeric_sort_key)
     if not mp4_files:
         log.warning(f"No .mp4 files found in {input_dir}")
         return

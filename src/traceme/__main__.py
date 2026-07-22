@@ -1,4 +1,4 @@
-from tracewave.cli import main
+from traceme.cli import main
 
 
 if __name__ == "__main__":

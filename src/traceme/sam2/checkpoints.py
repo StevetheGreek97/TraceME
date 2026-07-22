@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Dict
 from urllib.request import urlopen
 
-from tracewave.core.logging import get_logger
+from traceme.core.logging import get_logger
 
-log = get_logger("tracewave.sam2.checkpoints")
+log = get_logger("traceme.sam2.checkpoints")
 
 _BASE_URL = "https://dl.fbaipublicfiles.com/segment_anything_2/092824"
 _CHECKPOINT_FILES: Dict[str, str] = {
@@ -26,7 +26,7 @@ def _truthy_env(name: str, default: str = "1") -> bool:
 def default_checkpoint_dir() -> Path:
     xdg = os.getenv("XDG_CACHE_HOME")
     base = Path(xdg) if xdg else Path.home() / ".cache"
-    return base / "tracewave" / "sam2" / "checkpoints"
+    return base / "traceme" / "sam2" / "checkpoints"
 
 
 def checkpoint_filename(model: str) -> str:
@@ -102,7 +102,7 @@ def resolve_checkpoint(
             return path
 
     if auto_download is None:
-        auto_download = _truthy_env("TRACEWAVE_AUTO_DOWNLOAD", "1")
+        auto_download = _truthy_env("TRACEME_AUTO_DOWNLOAD", "1")
 
     if auto_download:
         target_dir = Path(checkpoint_dir).expanduser() if checkpoint_dir else default_checkpoint_dir()
@@ -110,5 +110,5 @@ def resolve_checkpoint(
 
     raise FileNotFoundError(
         "SAM2 checkpoint not found. Set SAM2_CHECKPOINT or SAM2_CHECKPOINT_DIR, "
-        "or run tracewave-download-checkpoints."
+        "or run traceme-download-checkpoints."
     )

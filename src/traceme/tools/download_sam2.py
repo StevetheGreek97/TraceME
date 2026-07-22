@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from tracewave.sam2.checkpoints import (
+from traceme.sam2.checkpoints import (
     download_all_checkpoints,
     download_checkpoint,
     checkpoint_filename,
@@ -12,7 +12,7 @@ from tracewave.sam2.checkpoints import (
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Download SAM2 checkpoints for TraceWave.")
+    parser = argparse.ArgumentParser(description="Download SAM2 checkpoints for TraceME.")
     parser.add_argument(
         "--dir",
         type=Path,

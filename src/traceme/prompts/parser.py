@@ -1,4 +1,4 @@
-# tracewave/prompt_parser_yaml.py
+# traceme/prompt_parser_yaml.py
 from __future__ import annotations
 
 import json

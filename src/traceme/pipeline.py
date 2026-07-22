@@ -9,10 +9,10 @@ import shutil
 
 import os
 
-from tracewave.core.logging import add_file_handler, get_logger, set_log_context, timer
-from tracewave.video.merge import merge_csv_chunks, merge_chunk_videos
-from tracewave.prompts.parser import YamlPromptParser
-from tracewave.video.chunker import VideoChunker
+from traceme.core.logging import add_file_handler, get_logger, set_log_context, timer
+from traceme.video.merge import merge_csv_chunks, merge_chunk_videos
+from traceme.prompts.parser import YamlPromptParser
+from traceme.video.chunker import VideoChunker
 
 ChunkMode = Literal["auto", "load", "force"]
 MODEL_CHOICES = ("tiny", "small", "base_plus", "large")
@@ -158,7 +158,7 @@ def _run_step(log: logging.Logger, label: str, fn: Callable[[], T], *, fatal: bo
 
 
 def run_pipeline(cfg: PipelineConfig) -> None:
-    log = get_logger("tracewave.pipeline")
+    log = get_logger("traceme.pipeline")
     paths = PipelinePaths.from_config(cfg)
 
     paths.output_root.mkdir(parents=True, exist_ok=True)
@@ -174,7 +174,7 @@ def run_pipeline(cfg: PipelineConfig) -> None:
         os.environ["SAM2_MODEL"] = cfg.model
 
     try:
-        from tracewave.sam2 import config as sam2_config
+        from traceme.sam2 import config as sam2_config
     except Exception as e:
         log.error("Failed to import SAM2 config. Install SAM2 and its dependencies. Error: %s", e)
         raise
@@ -217,7 +217,7 @@ def run_pipeline(cfg: PipelineConfig) -> None:
         f"across {len(by_chunk)} chunks"
     )
 
-    from tracewave.sam2.runner import run_sam2
+    from traceme.sam2.runner import run_sam2
 
     _run_step(
         log,

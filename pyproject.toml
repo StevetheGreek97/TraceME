@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tracewave"
+name = "traceme"
 version = "0.2.0"
-description = "TraceWave video tracking pipeline using SAM2"
+description = "TraceME video tracking pipeline using SAM2"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -21,13 +21,13 @@ dependencies = [
 ]
 
 [project.scripts]
-tracewave-gen-tasks = "tracewave.tools.gen_tasks:main"
-tracewave = "tracewave.cli:main"
-tracewave-download-checkpoints = "tracewave.tools.download_sam2:main"
+traceme-gen-tasks = "traceme.tools.gen_tasks:main"
+traceme = "traceme.cli:main"
+traceme-download-checkpoints = "traceme.tools.download_sam2:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["tracewave*"]
+include = ["traceme*"]

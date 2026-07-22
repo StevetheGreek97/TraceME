@@ -7,18 +7,18 @@ from time import sleep
 from typing import Literal
 
 from sam2.build_sam import build_sam2_video_predictor
-from tracewave.sam2.config import SAM2_CHECKPOINT, MODEL_CFG, device, SEED_DIRNAME
-from tracewave.sam2.io import (
+from traceme.sam2.config import SAM2_CHECKPOINT, MODEL_CFG, device, SEED_DIRNAME
+from traceme.sam2.io import (
     _seed_file,
     _unpack_mask,
     _pack_mask_bool,
     _write_csv_for_chunk,
     global_to_inchunk_idx,
 )
-from tracewave.core.logging import get_logger, timer
-from tracewave.video.render import _render_chunk_video
+from traceme.core.logging import get_logger, timer
+from traceme.video.render import _render_chunk_video
 
-log = get_logger("tracewave.sam2.runner")
+log = get_logger("traceme.sam2.runner")
 
 
 def _safe_unlink(p: Path, retries=5, delay=0.1):

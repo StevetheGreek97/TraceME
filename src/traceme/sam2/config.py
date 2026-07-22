@@ -5,9 +5,9 @@ from contextlib import nullcontext
 import torch
 import sam2
 
-from tracewave.core.logging import get_logger
-from tracewave.sam2.checkpoints import resolve_checkpoint, default_checkpoint_dir
-log = get_logger("tracewave.sam2.config")
+from traceme.core.logging import get_logger
+from traceme.sam2.checkpoints import resolve_checkpoint, default_checkpoint_dir
+log = get_logger("traceme.sam2.config")
 
 # Optional NVML import (unchanged)
 try:
@@ -199,8 +199,8 @@ if missing:
         " - We pass the *relative* path to Hydra and switch CWD to the package dir automatically.",
         " - If you overrode SAM2_ROOT, ensure it contains 'sam2/' and 'checkpoints/'.",
         " - Set SAM2_CHECKPOINT or SAM2_CHECKPOINT_DIR to point to checkpoints.",
-        " - Or run: tracewave-download-checkpoints",
-        " - To disable auto-download, set TRACEWAVE_AUTO_DOWNLOAD=0.",
+        " - Or run: traceme-download-checkpoints",
+        " - To disable auto-download, set TRACEME_AUTO_DOWNLOAD=0.",
         " - Example layout:",
         "     $SAM2_ROOT/",
         "       ├─ sam2/",

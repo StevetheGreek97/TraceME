@@ -4,7 +4,7 @@ from pathlib import Path
 import csv
 import numpy as np
 
-from tracewave.sam2.config import SEED_DIRNAME
+from traceme.sam2.config import SEED_DIRNAME
 
 
 def _seed_file(out_root: Path, cid: int) -> Path:
@@ -61,11 +61,14 @@ def _write_csv_for_chunk(
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["chunk_id", "global_frame_idx", "in_chunk_idx", "area_px"])
+        writer.writerow(["chunk_id", "global_frame_idx", "in_chunk_idx", "obj_id", "area_px"])
         start = cid * cs
         ovl_start = max(0, start - ov) if cid > 0 and ov > 0 else start
         for in_idx in sorted(areas_per_frame.keys()):
             per_obj = areas_per_frame[in_idx]
-            area_px = max(per_obj.values()) if per_obj else 0
             global_idx = ovl_start + in_idx
-            writer.writerow([cid, global_idx, in_idx, int(area_px)])
+            if not per_obj:
+                writer.writerow([cid, global_idx, in_idx, "", 0])
+                continue
+            for obj_id in sorted(per_obj.keys()):
+                writer.writerow([cid, global_idx, in_idx, obj_id, int(per_obj[obj_id])])

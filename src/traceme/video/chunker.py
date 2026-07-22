@@ -7,15 +7,22 @@ import shutil
 import re
 import json
 from datetime import datetime
-from tracewave.core.logging import get_logger, timer
+from traceme.core.logging import get_logger, timer
 
-log = get_logger("tracewave.video.chunker")
+log = get_logger("traceme.video.chunker")
 
 _IMG_EXTS = {".jpg", ".jpeg", ".png"}
 _MANIFEST = ".chunks_manifest.json"
 
 
-def _numeric_key(p: Path) -> int:
+def numeric_sort_key(p: Path) -> int:
+    """
+    Sort key based on the trailing integer in a path's stem (e.g. "chunk_007"
+    -> 7, "vid_chunk_1000.csv" -> 1000). Plain string sort breaks once
+    zero-padded indices roll past their padding width (e.g. "chunk_1000"
+    sorts before "chunk_099"), so anything ordered by chunk/frame index
+    should use this instead of `sorted()`'s default string comparison.
+    """
     stem = p.stem
     if stem.isdigit():
         return int(stem)
@@ -51,7 +58,7 @@ class VideoChunker:
         if self.frame_dir.exists():
             self._frame_paths: List[Path] = sorted(
                 (p for p in self.frame_dir.iterdir() if p.suffix.lower() in _IMG_EXTS),
-                key=_numeric_key
+                key=numeric_sort_key
             )
         else:
             self._frame_paths = []
@@ -244,14 +251,17 @@ class VideoChunker:
         chunk_dir = self.get_chunk_dir(chunk_index)
         return sorted(
             (p for p in chunk_dir.iterdir() if p.suffix.lower() in _IMG_EXTS),
-            key=_numeric_key
+            key=numeric_sort_key
         )
 
     def get_frame_names(self, chunk_index: int) -> List[str]:
         return [p.name for p in self.get_frame_paths(chunk_index)]
 
     def get_chunk_dirs(self) -> List[Path]:
-        return sorted((d for d in self.output_dir.iterdir() if d.is_dir() and d.name.startswith("chunk_")))
+        return sorted(
+            (d for d in self.output_dir.iterdir() if d.is_dir() and d.name.startswith("chunk_")),
+            key=numeric_sort_key,
+        )
 
     def count_chunks(self) -> int:
         return len(self.get_chunk_dirs())
