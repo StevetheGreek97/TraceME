@@ -1,8 +1,0 @@
-numpy>=1.24
-torch>=2.5.1
-torchvision>=0.20.1
-opencv-python-headless>=4.8
-pandas>=2.0
-pyyaml>=6.0
-imageio-ffmpeg>=0.4.9
-sam2>=1.1.0
