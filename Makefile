@@ -17,7 +17,7 @@ SAM2_REPO_REF ?=
 SAM2_DOWNLOAD_CHECKPOINTS ?= 1
 SAM2_INSTALL_NOTEBOOKS ?= 0
 
-.PHONY: help install install-nosam2 run gen-tasks build test-install check-dist publish publish-test clean
+.PHONY: help install install-nosam2 run gen-tasks build test-install check-dist publish publish-test release clean
 
 help: ## Show available targets
 	@printf "Usage: make <target> [VAR=value]\n\n"
@@ -84,6 +84,24 @@ publish: check-dist ## Upload dist/* to PyPI
 
 publish-test: check-dist ## Upload dist/* to TestPyPI
 	@$(DIST_VENV_BIN)/python -m twine upload --repository testpypi "$(DIST_DIR)"/*
+
+release: ## Bump version, commit, tag, and push (VERSION required). Example: make release VERSION=0.3.0
+	@if [[ -z "$(VERSION)" ]]; then \
+		echo "ERROR: VERSION is required. Example:"; \
+		echo "  make release VERSION=0.3.0"; \
+		exit 1; \
+	fi
+	@if ! git diff --quiet || ! git diff --cached --quiet; then \
+		echo "ERROR: working tree is not clean. Commit or stash changes first."; \
+		exit 1; \
+	fi
+	@sed -i.bak 's/^version = ".*"/version = "$(VERSION)"/' pyproject.toml && rm -f pyproject.toml.bak
+	@git add pyproject.toml
+	@git commit -m "Release v$(VERSION)"
+	@git tag "v$(VERSION)"
+	@git push
+	@git push --tags
+	@echo "Pushed tag v$(VERSION) - GitHub Actions will build and publish to PyPI"
 
 clean: ## Remove venv and caches
 	@rm -rf "$(VENV_DIR)" "$(DIST_VENV_DIR)" "$(DIST_DIR)" build *.egg-info
