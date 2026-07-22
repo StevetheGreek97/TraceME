@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Literal, Optional, TypeVar
 import argparse
+import json
 import logging
 import shutil
 
@@ -15,7 +17,7 @@ from traceme.prompts.parser import YamlPromptParser
 from traceme.video.chunker import VideoChunker
 
 ChunkMode = Literal["auto", "load", "force"]
-MODEL_CHOICES = ("tiny", "small", "base_plus", "large")
+MODEL_CHOICES = ("tiny", "small", "base_plus", "large", "sam3")
 T = TypeVar("T")
 
 
@@ -30,6 +32,7 @@ class PipelineConfig:
     del_tmp: bool = False
     chunk_mode: ChunkMode = "auto"
     model: str | None = None
+    resume: bool = True
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,7 @@ class PipelinePaths:
     log_file: Path
     merged_csv: Path
     merged_video: Path
+    run_summary: Path
 
     @classmethod
     def from_config(cls, cfg: PipelineConfig) -> "PipelinePaths":
@@ -53,6 +57,7 @@ class PipelinePaths:
             log_file=tmp_root / f"{cfg.frame_dir.name}_run.log",
             merged_csv=cfg.output_folder / f"{cfg.frame_dir.name}.csv",
             merged_video=cfg.output_folder / f"{cfg.frame_dir.name}.mp4",
+            run_summary=cfg.output_folder / f"{cfg.frame_dir.name}_run_summary.json",
         )
 
 
@@ -92,11 +97,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         choices=MODEL_CHOICES,
         default=None,
-        help="SAM2 model to use (overrides SAM2_MODEL env var)."
+        help="Model to use: a SAM2 size (tiny/small/base_plus/large) or 'sam3' "
+             "(overrides SAM2_MODEL env var; sam3 requires the sam3 extra)."
     )
     parser.add_argument(
         "-d", "--del_tmp", action="store_true",
         help="If set, deletes temporary frame/chunk folders after processing."
+    )
+    parser.add_argument(
+        "--no-resume", action="store_true",
+        help="Reprocess all chunks even if completed outputs from a previous run exist."
     )
     return parser
 
@@ -113,6 +123,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> PipelineConfig:
         del_tmp=args.del_tmp,
         chunk_mode=args.chunk_mode,
         model=args.model,
+        resume=not args.no_resume,
     )
 
 
@@ -188,7 +199,7 @@ def run_pipeline(cfg: PipelineConfig) -> None:
         output_dir=paths.chunks_dir,
         chunk_size=cfg.chunk_size,
         overlap=cfg.overlap,
-        action="copy",
+        action="symlink",
         remove_org=False,
     )
 
@@ -211,6 +222,7 @@ def run_pipeline(cfg: PipelineConfig) -> None:
         prompts,
         chunk_size=cfg.chunk_size,
         overlap=cfg.overlap,
+        total_frames=len(chunker.get_all_frames_flat()) or None,
     )
     log.info(
         f"Prompts loaded: {sum(len(v) for v in by_chunk.values())} total "
@@ -219,7 +231,7 @@ def run_pipeline(cfg: PipelineConfig) -> None:
 
     from traceme.sam2.runner import run_sam2
 
-    _run_step(
+    summary = _run_step(
         log,
         "SAM2 run",
         lambda: run_sam2(
@@ -228,9 +240,11 @@ def run_pipeline(cfg: PipelineConfig) -> None:
             output=paths.files_dir,
             video_fps=cfg.fps,
             prepare_chunks=False,
+            resume=cfg.resume,
         ),
         fatal=True,
-    )
+    ) or {}
+    failed_chunks = summary.get("failed_chunks", [])
 
     _run_step(
         log,
@@ -245,14 +259,59 @@ def run_pipeline(cfg: PipelineConfig) -> None:
         fatal=False,
     )
 
-    if cfg.del_tmp:
-        def _cleanup() -> None:
-            shutil.rmtree(paths.tmp_root, ignore_errors=True)
-            log.info("Temporary files deleted.")
+    _run_step(
+        log,
+        "Writing run summary",
+        lambda: _write_run_summary(paths.run_summary, cfg, summary),
+        fatal=False,
+    )
 
-        _run_step(log, "Cleanup temporary files", _cleanup, fatal=False)
+    if cfg.del_tmp:
+        if failed_chunks:
+            log.warning(
+                "Keeping temporary files despite --del_tmp: %d chunk(s) failed and "
+                "the tmp folder is needed to resume.",
+                len(failed_chunks),
+            )
+        else:
+            def _cleanup() -> None:
+                shutil.rmtree(paths.tmp_root, ignore_errors=True)
+                log.info("Temporary files deleted.")
+
+            _run_step(log, "Cleanup temporary files", _cleanup, fatal=False)
+
+    if failed_chunks:
+        log.error(
+            "Pipeline finished with %d failed chunk(s): %s. Merged outputs are PARTIAL. "
+            "Re-run the same command to retry only the failed chunks.",
+            len(failed_chunks),
+            failed_chunks,
+        )
+        raise SystemExit(1)
 
     log.info("Pipeline finished successfully.")
+
+
+def _write_run_summary(path: Path, cfg: PipelineConfig, summary: dict) -> None:
+    failed = summary.get("failed_chunks", [])
+    payload = {
+        "status": "partial" if failed else "complete",
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        **summary,
+        "config": {
+            "frame_dir": str(cfg.frame_dir),
+            "output_folder": str(cfg.output_folder),
+            "prompt_file": str(cfg.prompt_file),
+            "chunk_size": cfg.chunk_size,
+            "overlap": cfg.overlap,
+            "fps": cfg.fps,
+            "chunk_mode": cfg.chunk_mode,
+            "model": cfg.model or os.environ.get("SAM2_MODEL", "large"),
+            "resume": cfg.resume,
+        },
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def cli_main(argv: Optional[Iterable[str]] = None) -> None:

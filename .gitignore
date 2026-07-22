@@ -25,3 +25,4 @@ dist
 .venv/
 __pycache__/
 sam2_configs/
+*.egg-info/

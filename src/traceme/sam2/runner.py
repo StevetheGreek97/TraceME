@@ -1,14 +1,16 @@
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 import gc
 import numpy as np
 import torch
 from contextlib import nullcontext
-from time import sleep
 from typing import Literal
 
 from sam2.build_sam import build_sam2_video_predictor
-from traceme.sam2.config import SAM2_CHECKPOINT, MODEL_CFG, device, SEED_DIRNAME
+from traceme.sam2.config import SAM2_CHECKPOINT, MODEL_CFG, IS_SAM3, device, SEED_DIRNAME
 from traceme.sam2.io import (
+    _done_marker,
+    _mask_stats,
     _seed_file,
     _unpack_mask,
     _pack_mask_bool,
@@ -21,30 +23,69 @@ from traceme.video.render import _render_chunk_video
 log = get_logger("traceme.sam2.runner")
 
 
-def _safe_unlink(p: Path, retries=5, delay=0.1):
-    for i in range(retries):
-        try:
-            p.unlink(missing_ok=True)
-            return
-        except PermissionError:
-            gc.collect()
-            sleep(delay * (i + 1))
-    try:
-        p.rename(p.with_suffix(p.suffix + ".stale"))
-    except Exception:
-        pass
+def _build_predictor():
+    if IS_SAM3:
+        from traceme.sam2.sam3_backend import build_sam3_tracker
+
+        return build_sam3_tracker(SAM2_CHECKPOINT, device)
+    return build_sam2_video_predictor(MODEL_CFG, str(SAM2_CHECKPOINT), device=device)
 
 
-def _cleanup_predictor(predictor, inf_state):
+def _release_state(inf_state):
     if inf_state is not None:
         del inf_state
-    if predictor is not None:
-        del predictor
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
-    return None, None
+    return None
+
+
+def _finalize_chunk(
+    *,
+    cid: int,
+    out_root: Path,
+    csv_path: Path,
+    mp4_path: Path,
+    frame_files: list,
+    video_segments: dict,
+    video_fps: int,
+    skip_first: int,
+    cs: int,
+    ov: int,
+) -> tuple[int, int]:
+    """CPU-side per-chunk output: stats + CSV, annotated video, done marker.
+
+    Runs on the finalize thread so the GPU can start the next chunk. The done
+    marker is written last, so a crash anywhere here leaves the chunk
+    incomplete and it will be reprocessed on resume.
+    """
+    with timer(log, f"[chunk {cid:03d}] write_csv"):
+        stats_per_frame: dict[int, dict[int, tuple | None]] = {}
+        objects_in_chunk = 0
+        for idx, segs in video_segments.items():
+            if not segs:
+                stats_per_frame[idx] = {}
+            else:
+                spf = {oid: _mask_stats(mask) for oid, mask in segs.items()}
+                objects_in_chunk += len(spf)
+                stats_per_frame[idx] = spf
+
+        _write_csv_for_chunk(csv_path, stats_per_frame, cid=cid, cs=cs, ov=ov)
+        log.info(
+            f"[chunk {cid:03d}] wrote {csv_path.name} "
+            f"(frames={len(stats_per_frame)}, objs={objects_in_chunk})"
+        )
+
+    with timer(log, f"[chunk {cid:03d}] render_video"):
+        _render_chunk_video(
+            mp4_path, frame_files, video_segments, fps=video_fps, skip_first=skip_first
+        )
+        log.info(f"[chunk {cid:03d}] wrote {mp4_path.name}")
+
+    _done_marker(out_root, cid).touch()
+    log.info(f"[OK] chunk {cid:03d} complete")
+    return len(stats_per_frame), objects_in_chunk
 
 
 def run_sam2(
@@ -55,7 +96,13 @@ def run_sam2(
     video_fps: int = 30,
     prepare_chunks: bool = True,
     chunk_mode: Literal["auto", "load", "force"] = "auto",
-):
+    resume: bool = True,
+) -> dict:
+    """
+    Process all chunks. Returns a summary dict:
+    {"total_chunks", "processed_chunks", "resumed_chunks", "failed_chunks",
+     "total_frames", "total_objects"} where the chunk entries are lists of ids.
+    """
     out_root = chunker.output_dir
     (out_root / SEED_DIRNAME).mkdir(parents=True, exist_ok=True)
     if prepare_chunks:
@@ -88,29 +135,56 @@ def run_sam2(
 
     total_frames = 0
     total_objects = 0
+    processed_chunks: list[int] = []
+    resumed_chunks: list[int] = []
+    failed_chunks: list[int] = []
 
+    # The predictor is built once (on the first chunk that needs it) and
+    # reused for every chunk; only the per-chunk inference state is rebuilt.
     predictor = None
     inf_state = None
 
+    # CSV/render/marker for a finished chunk run on this worker while the GPU
+    # tracks the next chunk. At most one finalize is in flight, so memory
+    # holds at most two chunks' worth of masks.
+    finalizer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="finalize")
+    pending: list[tuple[int, Future]] = []
+
+    def _collect_pending() -> None:
+        nonlocal total_frames, total_objects
+        while pending:
+            pcid, fut = pending.pop(0)
+            try:
+                n_f, n_o = fut.result()
+                total_frames += n_f
+                total_objects += n_o
+                processed_chunks.append(pcid)
+            except Exception as e:
+                failed_chunks.append(pcid)
+                log.error(f"[chunk {pcid:03d}] finalize failed: {e}", exc_info=True)
+
     try:
         for cid in all_chunk_ids:
+            csv_path = output / f"{base_name}_chunk_{cid:03d}.csv"
+            mp4_path = output / f"{base_name}_chunk_{cid:03d}.mp4"
+
+            if resume and _done_marker(out_root, cid).exists() and csv_path.exists() and mp4_path.exists():
+                resumed_chunks.append(cid)
+                log.info(f"[chunk {cid:03d}] already complete; skipping (use --no-resume to reprocess)")
+                continue
+
             chunk_dir = chunker.get_chunk_dir(cid)
             frame_files = chunker.get_frame_paths(cid)
             n_frames = len(frame_files)
             log.info(f"[chunk {cid:03d}] dir={chunk_dir} | frames={n_frames}")
             if n_frames == 0:
                 log.warning(f"[chunk {cid:03d}] No frames; skipping")
-                sf = _seed_file(out_root, cid - 1)
-                if sf.exists():
-                    _safe_unlink(sf)
+                _done_marker(out_root, cid).touch()
                 continue
 
-            # Build predictor per chunk
-            predictor = build_sam2_video_predictor(
-                MODEL_CFG,
-                str(SAM2_CHECKPOINT),
-                device=device,
-            )
+            if predictor is None:
+                with timer(log, "Build predictor"):
+                    predictor = _build_predictor()
 
             try:
                 # init state
@@ -125,35 +199,39 @@ def run_sam2(
                 if ov > 0 and cid > 0:
                     prev_seed_path = _seed_file(out_root, cid - 1)
                     if prev_seed_path.exists():
+                        # Seeds are kept on disk (not consumed) so an interrupted
+                        # run can resume from the first incomplete chunk.
                         with timer(log, f"[chunk {cid:03d}] restore_seeds"):
-                            try:
-                                with np.load(prev_seed_path, allow_pickle=True) as data:
-                                    rel_indices = data["rel_indices"].copy()
-                                    obj_ids_arr = data["obj_ids"].copy()
-                                    packed_list = data["packed"].copy()
-                                    shapes_list = data["shapes"].copy()
+                            with np.load(prev_seed_path, allow_pickle=True) as data:
+                                rel_indices = data["rel_indices"].copy()
+                                obj_ids_arr = data["obj_ids"].copy()
+                                packed_list = data["packed"].copy()
+                                shapes_list = data["shapes"].copy()
 
-                                restored = 0
-                                for r, oids, packed_masks, shapes in zip(
-                                    rel_indices, obj_ids_arr, packed_list, shapes_list
-                                ):
-                                    if r >= n_frames:
-                                        continue
-                                    oids = np.asarray(oids, dtype=np.int32)
-                                    packed_masks = [np.asarray(pm, dtype=np.uint8) for pm in packed_masks]
-                                    shapes = [tuple(map(int, shp)) for shp in shapes]
-                                    for oid, packed, shp in zip(oids, packed_masks, shapes):
-                                        m = _unpack_mask(packed, shp)
-                                        predictor.add_new_mask(
-                                            inference_state=inf_state,
-                                            frame_idx=int(r),
-                                            obj_id=int(oid),
-                                            mask=m,
-                                        )
-                                        restored += 1
-                                log.info(f"[chunk {cid:03d}] restored {restored} seed masks from overlap")
-                            finally:
-                                _safe_unlink(prev_seed_path)
+                            restored = 0
+                            for r, oids, packed_masks, shapes in zip(
+                                rel_indices, obj_ids_arr, packed_list, shapes_list
+                            ):
+                                if r >= n_frames:
+                                    continue
+                                oids = np.asarray(oids, dtype=np.int32)
+                                packed_masks = [np.asarray(pm, dtype=np.uint8) for pm in packed_masks]
+                                shapes = [tuple(map(int, shp)) for shp in shapes]
+                                for oid, packed, shp in zip(oids, packed_masks, shapes):
+                                    m = _unpack_mask(packed, shp)
+                                    predictor.add_new_mask(
+                                        inference_state=inf_state,
+                                        frame_idx=int(r),
+                                        obj_id=int(oid),
+                                        mask=m,
+                                    )
+                                    restored += 1
+                            log.info(f"[chunk {cid:03d}] restored {restored} seed masks from overlap")
+                    else:
+                        log.warning(
+                            f"[chunk {cid:03d}] no overlap seeds from chunk {cid - 1:03d}; "
+                            "object identity may not carry over"
+                        )
 
                 # ---- apply prompts ----
                 plist = by_chunk.get(cid, [])
@@ -203,33 +281,7 @@ def run_sam2(
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
 
-                # ---- CSV (RENAMED) ----
-                with timer(log, f"[chunk {cid:03d}] write_csv"):
-                    areas_per_frame: dict[int, dict[int, int]] = {}
-                    objects_in_chunk = 0
-                    for idx, segs in video_segments.items():
-                        if not segs:
-                            areas_per_frame[idx] = {}
-                        else:
-                            apf = {oid: int(np.count_nonzero(mask)) for oid, mask in segs.items()}
-                            objects_in_chunk += len(apf)
-                            areas_per_frame[idx] = apf
-
-                    csv_path = output / f"{base_name}_chunk_{cid:03d}.csv"
-                    _write_csv_for_chunk(csv_path, areas_per_frame, cid=cid, cs=cs, ov=ov)
-                    log.info(
-                        f"[chunk {cid:03d}] wrote {csv_path.name} "
-                        f"(frames={len(areas_per_frame)}, objs={objects_in_chunk})"
-                    )
-                    total_frames += len(areas_per_frame)
-                    total_objects += objects_in_chunk
-
-                # ---- video (RENAMED) ----
-                with timer(log, f"[chunk {cid:03d}] render_video"):
-                    mp4_path = output / f"{base_name}_chunk_{cid:03d}.mp4"
-                    _render_chunk_video(mp4_path, frame_files, video_segments, fps=video_fps)
-                    log.info(f"[chunk {cid:03d}] wrote {mp4_path.name}")
-                # ---- overlap seeds ----
+                # ---- overlap seeds (sync: the next chunk restores them) ----
                 if ov > 0:
                     with timer(log, f"[chunk {cid:03d}] write_overlap_seeds"):
                         tail_start = max(0, n_frames - ov)
@@ -261,14 +313,54 @@ def run_sam2(
                             )
                             log.info(f"[chunk {cid:03d}] wrote seeds → {sf.name} (frames={len(rel_indices)})")
 
-                log.info(f"[OK] chunk {cid:03d} complete")
+                # ---- hand off CSV/video/marker to the finalize worker ----
+                _collect_pending()  # bound in-flight finalizes (and memory) to one
+                skip = min(ov, cid * cs) if (cid > 0 and ov > 0) else 0
+                pending.append((
+                    cid,
+                    finalizer.submit(
+                        _finalize_chunk,
+                        cid=cid,
+                        out_root=out_root,
+                        csv_path=csv_path,
+                        mp4_path=mp4_path,
+                        frame_files=frame_files,
+                        video_segments=video_segments,
+                        video_fps=video_fps,
+                        skip_first=skip,
+                        cs=cs,
+                        ov=ov,
+                    ),
+                ))
 
             except Exception as e:
+                failed_chunks.append(cid)
                 log.exception(f"[chunk {cid:03d}] processing failed: {e}")
 
             finally:
-                predictor, inf_state = _cleanup_predictor(predictor, inf_state)
+                inf_state = _release_state(inf_state)
 
     finally:
-        predictor, inf_state = _cleanup_predictor(predictor, inf_state)
-    log.info(f"Run complete: frames={total_frames}, objects={total_objects}, chunks={total_chunks}")
+        try:
+            _collect_pending()
+        finally:
+            finalizer.shutdown(wait=True)
+            if predictor is not None:
+                del predictor
+                predictor = None
+            inf_state = _release_state(inf_state)
+
+    log.info(
+        f"Run complete: frames={total_frames}, objects={total_objects}, chunks={total_chunks} "
+        f"(processed={len(processed_chunks)}, resumed={len(resumed_chunks)}, failed={len(failed_chunks)})"
+    )
+    if failed_chunks:
+        log.error(f"Failed chunks: {failed_chunks} — their frames are missing from merged outputs")
+    return {
+        "total_chunks": total_chunks,
+        "processed_chunks": processed_chunks,
+        "resumed_chunks": resumed_chunks,
+        "failed_chunks": failed_chunks,
+        "total_frames": total_frames,
+        "total_objects": total_objects,
+    }

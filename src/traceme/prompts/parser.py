@@ -200,8 +200,14 @@ class YamlPromptParser:
           - "first" : keep only the earlier chunk for boundary frames.
           - "last"  : keep only the later chunk for boundary frames.
         """
-        max_frame = max((p.frame_idx for p in prompts), default=-1)
-        total_chunks = (max_frame + 1 + chunk_size - 1) // chunk_size if max_frame >= 0 else None
+        # An explicit total_frames is authoritative. Only when it is unknown
+        # do we bound the chunk count by the highest prompted frame (which
+        # can under-estimate: a boundary prompt on the last prompted frame
+        # would otherwise not be duplicated into the following chunk).
+        total_chunks = None
+        if total_frames is None:
+            max_frame = max((p.frame_idx for p in prompts), default=-1)
+            total_chunks = (max_frame + 1 + chunk_size - 1) // chunk_size if max_frame >= 0 else None
 
         buckets: Dict[int, List[Prompt]] = {}
         for p in prompts:

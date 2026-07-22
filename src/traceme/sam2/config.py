@@ -150,24 +150,27 @@ MODEL_CFGS = {
     "small":     "configs/sam2.1/sam2.1_hiera_s.yaml",
     "base_plus": "configs/sam2.1/sam2.1_hiera_b+.yaml",
     "large":     "configs/sam2.1/sam2.1_hiera_l.yaml",
+    "sam3":      None,  # SAM3 needs no Hydra config; see traceme.sam2.sam3_backend
 }
 
 MODEL = os.environ.get("SAM2_MODEL", "large")
 if MODEL not in MODEL_CFGS:
     raise ValueError(f"Unknown MODEL '{MODEL}'. Choose from: {list(MODEL_CFGS)}")
-log.debug("SAM2 model: %s", MODEL)
+IS_SAM3 = MODEL == "sam3"
+log.debug("Model: %s", MODEL)
 
 SAM2_CHECKPOINTS = {
     "tiny":      SAM2_ROOT / "checkpoints" / "sam2.1_hiera_tiny.pt",
     "small":     SAM2_ROOT / "checkpoints" / "sam2.1_hiera_small.pt",
     "base_plus": SAM2_ROOT / "checkpoints" / "sam2.1_hiera_base_plus.pt",
     "large":     SAM2_ROOT / "checkpoints" / "sam2.1_hiera_large.pt",
+    "sam3":      SAM2_ROOT / "checkpoints" / "sam3.pt",
 }
 
 # Absolute paths for validation
-_cfg_rel  = MODEL_CFGS[MODEL]               # what Hydra expects (relative)
-_cfg_abs  = SAM2_PKG_DIR / _cfg_rel         # must exist
-_ckpt_abs = SAM2_CHECKPOINTS[MODEL]         # must exist
+_cfg_rel  = MODEL_CFGS[MODEL]                            # what Hydra expects (relative)
+_cfg_abs  = (SAM2_PKG_DIR / _cfg_rel) if _cfg_rel else None  # must exist (SAM2 only)
+_ckpt_abs = SAM2_CHECKPOINTS[MODEL]                      # must exist
 _ckpt_err = None
 
 if not _ckpt_abs.exists():
@@ -182,7 +185,7 @@ if not _ckpt_abs.exists():
         _ckpt_err = str(e)
 
 missing = []
-if not _cfg_abs.exists():
+if _cfg_abs is not None and not _cfg_abs.exists():
     missing.append(("MODEL_CFG (expected relative)", _cfg_abs))
 if not _ckpt_abs.exists():
     missing.append(("SAM2_CHECKPOINT", _ckpt_abs))
@@ -235,4 +238,9 @@ def log_precision_summary(logger=log) -> None:
 
 
 def log_model_summary(logger=log) -> None:
-    logger.info("SAM2 config: cfg=%s ckpt=%s", _cfg_abs, _ckpt_abs)
+    logger.info(
+        "Model config: model=%s cfg=%s ckpt=%s",
+        MODEL,
+        _cfg_abs if _cfg_abs is not None else "<none: sam3>",
+        _ckpt_abs,
+    )

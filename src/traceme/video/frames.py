@@ -39,6 +39,8 @@ def _annotate_frame(frame_bgr: np.ndarray, obj_ids: list[int], masks) -> np.ndar
         m = _mask_to_bool(masks[k])
         if m.shape[:2] != (h, w):
             m = cv2.resize(m.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST).astype(bool)
+        if not m.any():
+            continue
 
         color = _obj_color(int(oid))
 

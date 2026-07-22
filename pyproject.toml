@@ -20,10 +20,17 @@ dependencies = [
   "sam2>=1.1.0",
 ]
 
+[project.optional-dependencies]
+sam3 = ["sam3>=0.1.4"]  # requires Python >= 3.12
+
 [project.scripts]
 traceme-gen-tasks = "traceme.tools.gen_tasks:main"
 traceme = "traceme.cli:main"
 traceme-download-checkpoints = "traceme.tools.download_sam2:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: slow tests needing real model weights"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

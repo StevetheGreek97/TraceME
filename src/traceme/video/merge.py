@@ -23,10 +23,12 @@ def _handle_single_file(files: list[Path], output: Path, kind: str) -> bool:
         log.info(f"Single {kind} already correctly named → {output.name}")
         return True
     try:
-        src.rename(output)
-        log.info(f"Renamed single {kind} → {output.name}")
+        # Copy (not rename): the per-chunk file must stay in place so a
+        # subsequent run can recognize the chunk as complete and resume.
+        shutil.copy2(src, output)
+        log.info(f"Copied single {kind} → {output.name}")
     except Exception as e:
-        log.exception(f"Failed to rename {src.name} to {output.name}: {e}")
+        log.exception(f"Failed to copy {src.name} to {output.name}: {e}")
     return True
 
 
@@ -94,8 +96,10 @@ def merge_csv_chunks(input_dir: Path, output_csv: Path) -> None:
     for col in ("chunk_id", "global_frame_idx", "in_chunk_idx", "area_px"):
         if col in merged_df.columns:
             merged_df[col] = merged_df[col].astype("int64")
-    if "obj_id" in merged_df.columns:
-        merged_df["obj_id"] = merged_df["obj_id"].astype("Int64")
+    # Columns blank on empty frames need the nullable integer dtype.
+    for col in ("obj_id", "bbox_x", "bbox_y", "bbox_w", "bbox_h"):
+        if col in merged_df.columns:
+            merged_df[col] = merged_df[col].astype("Int64")
 
     merged_df.to_csv(output_csv, index=False)
 

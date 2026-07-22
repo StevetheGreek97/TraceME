@@ -45,7 +45,20 @@ This creates a venv, installs TraceME in editable mode, clones SAM2 into `third_
 ### Configure SAM2 (optional)
 If SAM2 lives somewhere else, set:
 - `SAM2_ROOT=/path/to/sam2` (should contain `sam2/` and `checkpoints/`)
-- `SAM2_MODEL=tiny|small|base_plus|large` (default: `large`)
+- `SAM2_MODEL=tiny|small|base_plus|large|sam3` (default: `large`)
+
+### SAM3 (optional)
+The pipeline can also run Meta's SAM3 tracker with the same points/boxes prompt
+workflow:
+```
+pip install 'traceme-pipeline[sam3]'   # requires Python >= 3.12
+traceme -i frames/ -o out/ -p prompts.yaml --model sam3
+```
+The `sam3.pt` checkpoint is resolved through the same logic as the SAM2
+checkpoints (`SAM2_CHECKPOINT`, `SAM2_CHECKPOINT_DIR`, or the default cache
+dir), but it is **not** auto-downloaded: it is gated on Hugging Face, so log
+in with `hf auth login`, download it from the `facebook/sam3` repo, and place
+it in your checkpoint directory as `sam3.pt`.
 
 ## Usage
 Run the pipeline:
@@ -64,8 +77,15 @@ Prompt files must contain a top-level `prompts` list. See `src/traceme/prompts/p
 ## Outputs
 Given `frame_dir=/data/frames/clipA`, outputs are:
 - `/output/clipA.csv` (merged CSV)
-- `/output/clipA.mp4` (merged annotated video)
-- `/output/clipA_tmp/` (intermediate chunk files; removed if `--del_tmp` is set)
+- `/output/clipA.mp4` (merged annotated video; one color and `id:` label per tracked object; exactly one video frame per input frame, so video frame N corresponds to `global_frame_idx` N)
+- `/output/clipA_run_summary.json` (run status, processed/resumed/failed chunk ids, totals)
+- `/output/clipA_tmp/` (intermediate chunk files; removed if `--del_tmp` is set). Chunk folders contain symlinks to the original frames (falling back to copies on filesystems without symlink support), so chunking costs almost no disk space.
+
+CSV columns: `chunk_id, global_frame_idx, in_chunk_idx, obj_id, area_px, centroid_x, centroid_y, bbox_x, bbox_y, bbox_w, bbox_h`. Frames with no tracked objects produce a single row with an empty `obj_id` and `area_px=0`.
+
+## Resume & Failures
+- Completed chunks are marked in the tmp folder; re-running the same command skips them and continues from the first incomplete chunk. Use `--no-resume` to reprocess everything.
+- If any chunk fails, the pipeline still merges what it has, marks the run `"partial"` in the run summary, keeps the tmp folder (even with `--del_tmp`), and exits with code 1. Re-run the same command to retry only the failed chunks.
 
 ## Troubleshooting
 - If SAM2 configs or checkpoints are missing, TraceME will raise a clear error with the expected paths.

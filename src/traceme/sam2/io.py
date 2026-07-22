@@ -11,6 +11,10 @@ def _seed_file(out_root: Path, cid: int) -> Path:
     return out_root / SEED_DIRNAME / f"seed_chunk_{cid:03d}.npz"
 
 
+def _done_marker(out_root: Path, cid: int) -> Path:
+    return out_root / SEED_DIRNAME / f"chunk_{cid:03d}.done"
+
+
 def _pack_mask_bool(m_bool: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
     """
     Accept masks as (H,W), (1,H,W) or (H,W,1), bool/uint8/0-255.
@@ -50,9 +54,42 @@ def global_to_inchunk_idx(global_idx: int, cid: int, chunk_size: int, overlap: i
     return global_idx - ovl_start
 
 
+def _mask_stats(mask) -> tuple[int, float, float, int, int, int, int] | None:
+    """
+    Per-object mask stats: (area_px, centroid_x, centroid_y, bbox_x, bbox_y, bbox_w, bbox_h).
+    Returns None for an empty mask. Accepts (H,W), (1,H,W) or (H,W,1).
+    """
+    m = np.asarray(mask)
+    if m.ndim == 3 and m.shape[0] == 1:
+        m = m[0]
+    if m.ndim == 3 and m.shape[2] == 1:
+        m = m[..., 0]
+    ys, xs = np.nonzero(m)
+    if xs.size == 0:
+        return None
+    x0, x1 = int(xs.min()), int(xs.max())
+    y0, y1 = int(ys.min()), int(ys.max())
+    return (
+        int(xs.size),
+        round(float(xs.mean()), 2),
+        round(float(ys.mean()), 2),
+        x0,
+        y0,
+        x1 - x0 + 1,
+        y1 - y0 + 1,
+    )
+
+
+CSV_HEADER = [
+    "chunk_id", "global_frame_idx", "in_chunk_idx", "obj_id",
+    "area_px", "centroid_x", "centroid_y",
+    "bbox_x", "bbox_y", "bbox_w", "bbox_h",
+]
+
+
 def _write_csv_for_chunk(
     csv_path: Path,
-    areas_per_frame: dict[int, dict[int, int]],
+    stats_per_frame: dict[int, dict[int, tuple | None]],
     *,
     cid: int,
     cs: int,
@@ -61,14 +98,19 @@ def _write_csv_for_chunk(
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["chunk_id", "global_frame_idx", "in_chunk_idx", "obj_id", "area_px"])
+        writer.writerow(CSV_HEADER)
         start = cid * cs
         ovl_start = max(0, start - ov) if cid > 0 and ov > 0 else start
-        for in_idx in sorted(areas_per_frame.keys()):
-            per_obj = areas_per_frame[in_idx]
+        for in_idx in sorted(stats_per_frame.keys()):
+            per_obj = stats_per_frame[in_idx]
             global_idx = ovl_start + in_idx
             if not per_obj:
-                writer.writerow([cid, global_idx, in_idx, "", 0])
+                writer.writerow([cid, global_idx, in_idx, "", 0, "", "", "", "", "", ""])
                 continue
             for obj_id in sorted(per_obj.keys()):
-                writer.writerow([cid, global_idx, in_idx, obj_id, int(per_obj[obj_id])])
+                stats = per_obj[obj_id]
+                if stats is None:
+                    # Object is tracked but its mask vanished in this frame.
+                    writer.writerow([cid, global_idx, in_idx, obj_id, 0, "", "", "", "", "", ""])
+                else:
+                    writer.writerow([cid, global_idx, in_idx, obj_id, *stats])

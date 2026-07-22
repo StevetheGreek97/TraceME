@@ -15,7 +15,11 @@ _CHECKPOINT_FILES: Dict[str, str] = {
     "small": "sam2.1_hiera_small.pt",
     "base_plus": "sam2.1_hiera_base_plus.pt",
     "large": "sam2.1_hiera_large.pt",
+    "sam3": "sam3.pt",
 }
+# sam3.pt is gated on Hugging Face (needs `hf auth login`), so it cannot be
+# auto-downloaded from a public URL like the SAM2 checkpoints.
+_NO_AUTO_DOWNLOAD = {"sam3"}
 
 
 def _truthy_env(name: str, default: str = "1") -> bool:
@@ -63,6 +67,13 @@ def download_checkpoint(model: str, *, checkpoint_dir: Path | None = None) -> Pa
     fname = checkpoint_filename(model)
     target_dir = checkpoint_dir or default_checkpoint_dir()
     target_path = target_dir / fname
+    if model in _NO_AUTO_DOWNLOAD:
+        raise FileNotFoundError(
+            f"{fname} cannot be auto-downloaded: the SAM3 checkpoint is gated on "
+            "Hugging Face. Log in with `hf auth login`, download it from "
+            f"facebook/sam3, and place it at {target_path} (or point "
+            "SAM2_CHECKPOINT / SAM2_CHECKPOINT_DIR at it)."
+        )
     _download(f"{_BASE_URL}/{fname}", target_path)
     return target_path
 
@@ -70,6 +81,8 @@ def download_checkpoint(model: str, *, checkpoint_dir: Path | None = None) -> Pa
 def download_all_checkpoints(*, checkpoint_dir: Path | None = None) -> Path:
     target_dir = checkpoint_dir or default_checkpoint_dir()
     for model in _CHECKPOINT_FILES:
+        if model in _NO_AUTO_DOWNLOAD:
+            continue
         download_checkpoint(model, checkpoint_dir=target_dir)
     return target_dir
 

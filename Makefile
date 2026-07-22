@@ -17,7 +17,7 @@ SAM2_REPO_REF ?=
 SAM2_DOWNLOAD_CHECKPOINTS ?= 1
 SAM2_INSTALL_NOTEBOOKS ?= 0
 
-.PHONY: help install install-nosam2 run gen-tasks build test-install check-dist publish publish-test release clean
+.PHONY: help install install-nosam2 run gen-tasks test build test-install check-dist publish publish-test release clean
 
 help: ## Show available targets
 	@printf "Usage: make <target> [VAR=value]\n\n"
@@ -60,7 +60,10 @@ run: ## Run pipeline (ARGS required). Example: make run ARGS="-i frames -o out -
 	@$(VENV_BIN)/tracewave $(ARGS)
 
 gen-tasks: ## Generate tasks (ARGS optional)
-	@$(VENV_BIN)/tracewave-gen-tasks $(ARGS)
+	@$(VENV_BIN)/traceme-gen-tasks $(ARGS)
+
+test: ## Run the test suite (unit + integration; sam3 tests skip if unavailable)
+	pytest -q
 
 build: ## Build sdist + wheel into dist/
 	@$(PYTHON_BIN) -m build

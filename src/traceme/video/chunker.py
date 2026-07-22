@@ -6,7 +6,7 @@ from typing import Iterable, List, Literal, Dict, Any
 import shutil
 import re
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from traceme.core.logging import get_logger, timer
 
 log = get_logger("traceme.video.chunker")
@@ -39,7 +39,7 @@ class VideoChunker:
     output_dir: Path
     chunk_size: int = 1000
     overlap: int = 2
-    action: str = "copy"  # or "move"
+    action: str = "copy"  # "copy", "move" or "symlink"
     remove_org: bool = False
 
     def __post_init__(self) -> None:
@@ -49,8 +49,8 @@ class VideoChunker:
             raise ValueError("chunk_size must be > 0")
         if self.overlap < 0:
             raise ValueError("overlap must be >= 0")
-        if self.action not in {"copy", "move"}:
-            raise ValueError('action must be "copy" or "move"')
+        if self.action not in {"copy", "move", "symlink"}:
+            raise ValueError('action must be "copy", "move" or "symlink"')
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -184,12 +184,14 @@ class VideoChunker:
                 )
                 start = end
 
-        if self.action == "copy" and self.remove_org:
+        if self.action == "symlink" and self.remove_org:
+            log.warning("remove_org ignored: chunks are symlinks into the original folder")
+        elif self.action == "copy" and self.remove_org:
             log.info(f"remove_org=True → deleting original folder {self.frame_dir}")
             self._safe_rmtree(self.frame_dir)
 
         manifest_payload = {
-            "created_at": datetime.utcnow().isoformat() + "Z",
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "chunk_size": self.chunk_size,
             "overlap": self.overlap,
             "action": self.action,
@@ -278,14 +280,26 @@ class VideoChunker:
     # -------------------- Internals --------------------
 
     def _transfer(self, frames: Iterable[Path], dst_dir: Path) -> None:
+        warned_symlink = False
         for src in frames:
             dst = dst_dir / src.name
-            if self.action == "copy":
-                if not dst.exists():  # idempotent on re-run
+            if dst.exists():  # idempotent on re-run
+                continue
+            if self.action == "symlink":
+                try:
+                    dst.symlink_to(src.resolve())
+                except OSError:
+                    # Filesystem without symlink support (or no permission):
+                    # fall back to copying, once per chunk with a warning.
+                    if not warned_symlink:
+                        log.warning(
+                            f"Symlinks not supported for {dst_dir}; falling back to copy."
+                        )
+                        warned_symlink = True
                     shutil.copy2(src, dst)
+            elif self.action == "copy":
+                shutil.copy2(src, dst)
             else:  # move
-                if dst.exists():
-                    continue
                 shutil.move(src, dst)
 
     @staticmethod
