@@ -8,7 +8,7 @@ TraceME is a video tracking pipeline that runs SAM2 on frame sequences, produces
 - A CLI for running the pipeline over frame folders and prompt YAMLs.
 
 ## Requirements
-- Python 3.10+
+- Python 3.12+
 - SAM2 (installed automatically via pip)
 - CUDA GPU recommended for speed (CPU is supported but slow)
 
