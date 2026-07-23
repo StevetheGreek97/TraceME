@@ -7,7 +7,7 @@ name = "traceme-pipeline"
 version = "0.2.0"
 description = "TraceME video tracking pipeline using SAM2"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 dependencies = [
   "numpy>=1.24",
