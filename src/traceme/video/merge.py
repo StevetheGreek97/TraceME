@@ -2,6 +2,7 @@ from pathlib import Path
 import subprocess
 import shutil
 
+import numpy as np
 import pandas as pd
 
 from traceme.core.logging import get_logger
@@ -106,6 +107,61 @@ def merge_csv_chunks(input_dir: Path, output_csv: Path) -> None:
     log.info(
         f"[OK] Merged {len(csv_files)} chunk files → {output_csv.name} "
         f"({len(merged_df)} rows, {merged_df['global_frame_idx'].nunique()} unique frames)"
+    )
+
+
+def merge_mask_chunks(input_dir: Path, output_npz: Path) -> None:
+    """
+    Merges chunk_*_masks.npz files into one combined mask archive named
+    after frame_dir. If only one archive exists, it is copied to match the
+    frame_dir name (same rationale as merge_csv_chunks: the per-chunk file
+    must stay in place so a subsequent run can recognize the chunk as
+    complete and resume).
+    """
+    mask_files = sorted(input_dir.glob("*_masks.npz"), key=numeric_sort_key)
+    if not mask_files:
+        log.warning(f"No chunk *_masks.npz files found in {input_dir}")
+        return
+
+    if _handle_single_file(mask_files, output_npz, "mask archive"):
+        return
+
+    log.info(f"Merging {len(mask_files)} mask archives...")
+
+    # Dedup per (frame, object): boundary frames are duplicated across
+    # adjacent chunks. Keep the earlier chunk's mask, matching CSV merge.
+    merged: dict[tuple[int, int], tuple] = {}
+    for mask_file in mask_files:
+        try:
+            data = np.load(mask_file, allow_pickle=True)
+        except Exception as e:
+            log.exception(f"Failed to read {mask_file}: {e}")
+            continue
+
+        for gidx, oid, packed, shp in zip(
+            data["global_frame_idx"], data["obj_id"], data["packed"], data["shape"]
+        ):
+            key = (int(gidx), int(oid))
+            if key not in merged:
+                merged[key] = (packed, shp)
+
+    if not merged:
+        log.warning("No mask entries found during merge; not writing merged file.")
+        return
+
+    keys_sorted = sorted(merged.keys())
+    output_npz.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        output_npz,
+        global_frame_idx=np.array([k[0] for k in keys_sorted], dtype=np.int32),
+        obj_id=np.array([k[1] for k in keys_sorted], dtype=np.int32),
+        packed=np.array([merged[k][0] for k in keys_sorted], dtype=object),
+        shape=np.array([merged[k][1] for k in keys_sorted], dtype=object),
+    )
+
+    log.info(
+        f"[OK] Merged {len(mask_files)} chunk archives → {output_npz.name} "
+        f"({len(keys_sorted)} mask entries)"
     )
 
 

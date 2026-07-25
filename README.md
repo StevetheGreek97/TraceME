@@ -83,6 +83,29 @@ Given `frame_dir=/data/frames/clipA`, outputs are:
 
 CSV columns: `chunk_id, global_frame_idx, in_chunk_idx, obj_id, area_px, centroid_x, centroid_y, bbox_x, bbox_y, bbox_w, bbox_h`. Frames with no tracked objects produce a single row with an empty `obj_id` and `area_px=0`.
 
+## Saving Masks (for shape analysis)
+Pass `--save-masks` to persist every object's binary mask, bit-packed, into
+`/output/clipA_masks.npz` — one merged archive per video (per-chunk masks are
+written alongside each chunk's CSV/video during the run, then combined the
+same way the merged CSV/video are, so `--del_tmp` does **not** remove them).
+Only non-empty masks are stored.
+
+Reload the mask archive:
+```python
+import numpy as np
+from traceme.sam2.io import _unpack_mask
+
+data = np.load("clipA_masks.npz", allow_pickle=True)
+for gidx, oid, packed, shp in zip(
+    data["global_frame_idx"], data["obj_id"], data["packed"], data["shape"]
+):
+    mask = _unpack_mask(packed, tuple(shp))  # bool array, shape (H, W)
+    # e.g. shape descriptors via skimage:
+    # from skimage.measure import regionprops, label
+    # props = regionprops(label(mask))[0]
+    # props.eccentricity, props.perimeter, props.solidity, ...
+```
+
 ## Resume & Failures
 - Completed chunks are marked in the tmp folder; re-running the same command skips them and continues from the first incomplete chunk. Use `--no-resume` to reprocess everything.
 - If any chunk fails, the pipeline still merges what it has, marks the run `"partial"` in the run summary, keeps the tmp folder (even with `--del_tmp`), and exits with code 1. Re-run the same command to retry only the failed chunks.

@@ -10,11 +10,13 @@ from sam2.build_sam import build_sam2_video_predictor
 from traceme.sam2.config import SAM2_CHECKPOINT, MODEL_CFG, IS_SAM3, device, SEED_DIRNAME
 from traceme.sam2.io import (
     _done_marker,
+    _mask_archive_path,
     _mask_stats,
     _seed_file,
     _unpack_mask,
     _pack_mask_bool,
     _write_csv_for_chunk,
+    _write_masks_for_chunk,
     global_to_inchunk_idx,
 )
 from traceme.core.logging import get_logger, timer
@@ -53,6 +55,7 @@ def _finalize_chunk(
     skip_first: int,
     cs: int,
     ov: int,
+    save_masks: bool = False,
 ) -> tuple[int, int]:
     """CPU-side per-chunk output: stats + CSV, annotated video, done marker.
 
@@ -83,6 +86,12 @@ def _finalize_chunk(
         )
         log.info(f"[chunk {cid:03d}] wrote {mp4_path.name}")
 
+    if save_masks:
+        with timer(log, f"[chunk {cid:03d}] write_masks"):
+            masks_path = _mask_archive_path(csv_path)
+            _write_masks_for_chunk(masks_path, video_segments, cid=cid, cs=cs, ov=ov)
+            log.info(f"[chunk {cid:03d}] wrote {masks_path.name}")
+
     _done_marker(out_root, cid).touch()
     log.info(f"[OK] chunk {cid:03d} complete")
     return len(stats_per_frame), objects_in_chunk
@@ -97,6 +106,7 @@ def run_sam2(
     prepare_chunks: bool = True,
     chunk_mode: Literal["auto", "load", "force"] = "auto",
     resume: bool = True,
+    save_masks: bool = False,
 ) -> dict:
     """
     Process all chunks. Returns a summary dict:
@@ -330,6 +340,7 @@ def run_sam2(
                         skip_first=skip,
                         cs=cs,
                         ov=ov,
+                        save_masks=save_masks,
                     ),
                 ))
 

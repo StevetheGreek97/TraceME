@@ -80,6 +80,56 @@ def _mask_stats(mask) -> tuple[int, float, float, int, int, int, int] | None:
     )
 
 
+def _mask_archive_path(csv_path: Path) -> Path:
+    return csv_path.with_name(csv_path.stem + "_masks.npz")
+
+
+def _write_masks_for_chunk(
+    path: Path,
+    video_segments: dict[int, dict[int, np.ndarray]],
+    *,
+    cid: int,
+    cs: int,
+    ov: int,
+) -> None:
+    """Persist every non-empty object mask in a chunk as bit-packed arrays.
+
+    One entry per (frame, object) pair. Reload with e.g.:
+        data = np.load(path, allow_pickle=True)
+        for gidx, oid, packed, shp in zip(
+            data["global_frame_idx"], data["obj_id"], data["packed"], data["shape"]
+        ):
+            mask = _unpack_mask(packed, tuple(shp))
+    """
+    start = cid * cs
+    ovl_start = max(0, start - ov) if cid > 0 and ov > 0 else start
+
+    global_idx_list: list[int] = []
+    obj_id_list: list[int] = []
+    packed_list: list[np.ndarray] = []
+    shape_list: list[tuple[int, int]] = []
+
+    for in_idx in sorted(video_segments.keys()):
+        global_idx = ovl_start + in_idx
+        for obj_id, mask in video_segments[in_idx].items():
+            if not np.any(mask):
+                continue
+            packed, shp = _pack_mask_bool(mask)
+            global_idx_list.append(global_idx)
+            obj_id_list.append(int(obj_id))
+            packed_list.append(packed)
+            shape_list.append(shp)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path,
+        global_frame_idx=np.array(global_idx_list, dtype=np.int32),
+        obj_id=np.array(obj_id_list, dtype=np.int32),
+        packed=np.array(packed_list, dtype=object),
+        shape=np.array(shape_list, dtype=object),
+    )
+
+
 CSV_HEADER = [
     "chunk_id", "global_frame_idx", "in_chunk_idx", "obj_id",
     "area_px", "centroid_x", "centroid_y",

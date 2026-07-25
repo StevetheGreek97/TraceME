@@ -12,7 +12,7 @@ import shutil
 import os
 
 from traceme.core.logging import add_file_handler, get_logger, set_log_context, timer
-from traceme.video.merge import merge_csv_chunks, merge_chunk_videos
+from traceme.video.merge import merge_csv_chunks, merge_chunk_videos, merge_mask_chunks
 from traceme.prompts.parser import YamlPromptParser
 from traceme.video.chunker import VideoChunker
 
@@ -33,6 +33,7 @@ class PipelineConfig:
     chunk_mode: ChunkMode = "auto"
     model: str | None = None
     resume: bool = True
+    save_masks: bool = False
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class PipelinePaths:
     log_file: Path
     merged_csv: Path
     merged_video: Path
+    merged_masks: Path
     run_summary: Path
 
     @classmethod
@@ -57,6 +59,7 @@ class PipelinePaths:
             log_file=tmp_root / f"{cfg.frame_dir.name}_run.log",
             merged_csv=cfg.output_folder / f"{cfg.frame_dir.name}.csv",
             merged_video=cfg.output_folder / f"{cfg.frame_dir.name}.mp4",
+            merged_masks=cfg.output_folder / f"{cfg.frame_dir.name}_masks.npz",
             run_summary=cfg.output_folder / f"{cfg.frame_dir.name}_run_summary.json",
         )
 
@@ -108,6 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-resume", action="store_true",
         help="Reprocess all chunks even if completed outputs from a previous run exist."
     )
+    parser.add_argument(
+        "--save-masks", action="store_true",
+        help="Persist per-frame object masks as a compressed .npz per chunk "
+             "(<chunk>_masks.npz, bit-packed) for downstream shape analysis."
+    )
     return parser
 
 
@@ -124,6 +132,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> PipelineConfig:
         chunk_mode=args.chunk_mode,
         model=args.model,
         resume=not args.no_resume,
+        save_masks=args.save_masks,
     )
 
 
@@ -241,6 +250,7 @@ def run_pipeline(cfg: PipelineConfig) -> None:
             video_fps=cfg.fps,
             prepare_chunks=False,
             resume=cfg.resume,
+            save_masks=cfg.save_masks,
         ),
         fatal=True,
     ) or {}
@@ -258,6 +268,13 @@ def run_pipeline(cfg: PipelineConfig) -> None:
         lambda: merge_chunk_videos(paths.files_dir, paths.merged_video),
         fatal=False,
     )
+    if cfg.save_masks:
+        _run_step(
+            log,
+            "Merging chunk masks",
+            lambda: merge_mask_chunks(paths.files_dir, paths.merged_masks),
+            fatal=False,
+        )
 
     _run_step(
         log,
@@ -308,6 +325,7 @@ def _write_run_summary(path: Path, cfg: PipelineConfig, summary: dict) -> None:
             "chunk_mode": cfg.chunk_mode,
             "model": cfg.model or os.environ.get("SAM2_MODEL", "large"),
             "resume": cfg.resume,
+            "save_masks": cfg.save_masks,
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
