@@ -39,7 +39,7 @@ class VideoChunker:
     output_dir: Path
     chunk_size: int = 1000
     overlap: int = 2
-    action: str = "copy"  # "copy", "move" or "symlink"
+    action: str = "symlink"  # "copy", "move" or "symlink"
     remove_org: bool = False
 
     def __post_init__(self) -> None:
