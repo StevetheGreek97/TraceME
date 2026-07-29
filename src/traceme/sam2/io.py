@@ -160,7 +160,7 @@ def _write_csv_for_chunk(
             for obj_id in sorted(per_obj.keys()):
                 stats = per_obj[obj_id]
                 if stats is None:
-                    # Object is tracked but its mask vanished in this frame.
-                    writer.writerow([cid, global_idx, in_idx, obj_id, 0, "", "", "", "", "", ""])
+                    # Object is tracked but its mask vanished (lost) in this frame.
+                    writer.writerow([cid, global_idx, in_idx, obj_id, -1, -1, -1, -1, -1, -1, -1])
                 else:
                     writer.writerow([cid, global_idx, in_idx, obj_id, *stats])

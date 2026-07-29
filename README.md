@@ -81,7 +81,7 @@ Given `frame_dir=/data/frames/clipA`, outputs are:
 - `/output/clipA_run_summary.json` (run status, processed/resumed/failed chunk ids, totals)
 - `/output/clipA_tmp/` (intermediate chunk files; removed if `--del_tmp` is set). Chunk folders contain symlinks to the original frames (falling back to copies on filesystems without symlink support), so chunking costs almost no disk space.
 
-CSV columns: `chunk_id, global_frame_idx, in_chunk_idx, obj_id, area_px, centroid_x, centroid_y, bbox_x, bbox_y, bbox_w, bbox_h`. Frames with no tracked objects produce a single row with an empty `obj_id` and `area_px=0`.
+CSV columns: `chunk_id, global_frame_idx, in_chunk_idx, obj_id, area_px, centroid_x, centroid_y, bbox_x, bbox_y, bbox_w, bbox_h`. Frames with no tracked objects produce a single row with an empty `obj_id` and `area_px=0`. If an object is tracked but the model loses its mask for a given frame (empty prediction), every stat column for that row is `-1`.
 
 ## Saving Masks (for shape analysis)
 Pass `--save-masks` to persist every object's binary mask, bit-packed, into

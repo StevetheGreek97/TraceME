@@ -147,9 +147,9 @@ def test_csv_write_and_merge(tmp_path):
     # empty frame kept with area 0 and blank obj_id
     f1 = df[df["global_frame_idx"] == 1]
     assert len(f1) == 1 and f1.iloc[0]["area_px"] == 0 and pd.isna(f1.iloc[0]["obj_id"])
-    # vanished object row: area 0, blank bbox
+    # vanished (lost) object row: sentinel -1 across all stat columns
     van = df[(df["global_frame_idx"] == 4) & (df["obj_id"] == 2)]
-    assert van.iloc[0]["area_px"] == 0 and pd.isna(van.iloc[0]["bbox_x"])
+    assert van.iloc[0]["area_px"] == -1 and van.iloc[0]["bbox_x"] == -1
 
 
 # ---------------- chunker ----------------
