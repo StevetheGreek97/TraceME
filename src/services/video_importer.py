@@ -10,7 +10,7 @@ from typing import List, Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
 
-VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".mpeg", ".mpg", ".wmv"}
+VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".mpeg", ".mpg", ".wmv", "webm"}
 
 
 @dataclass

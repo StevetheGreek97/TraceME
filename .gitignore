@@ -7,3 +7,5 @@ __pycache__/
 *.ckpt
 .venv/
 traceme.egg-info/
+examples/
+traceme_pipeline.egg-info
