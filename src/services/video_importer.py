@@ -10,7 +10,18 @@ from typing import List, Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
 
-VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".mpeg", ".mpg", ".wmv", "webm"}
+VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".mpeg", ".mpg", ".wmv", ".webm"}
+
+
+def video_file_dialog_filter() -> str:
+    # Native Linux file pickers (e.g. the GTK/portal dialog) glob-match
+    # case-sensitively, so both cases must be listed explicitly or
+    # uppercase-extension files (e.g. .AVI) won't even appear.
+    patterns = []
+    for ext in sorted(VIDEO_EXTS):
+        patterns.append(f"*{ext}")
+        patterns.append(f"*{ext.upper()}")
+    return "Videos (" + " ".join(patterns) + ")"
 
 
 @dataclass

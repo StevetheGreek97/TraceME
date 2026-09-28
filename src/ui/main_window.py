@@ -37,7 +37,13 @@ from src.models import AnnotationModel, load_annotations, save_annotations, expo
 from src.project.store import create_project, load_project, save_project
 from src.project.types import ClassLabel, Project, VideoItem
 from src.services.sam2_service import Sam2Service, Sam2InitThread, Sam2PredictThread
-from src.services.video_importer import VideoImportThread, VideoImportResult, has_ffmpeg, VIDEO_EXTS
+from src.services.video_importer import (
+    VideoImportThread,
+    VideoImportResult,
+    has_ffmpeg,
+    VIDEO_EXTS,
+    video_file_dialog_filter,
+)
 from src.ui.image_view import BASE_COLORS, ImageView
 
 
@@ -364,7 +370,7 @@ class MainWindow(QMainWindow):
             self,
             "Select Videos",
             str(Path.cwd()),
-            "Videos (*.mp4 *.mov *.avi *.mkv *.m4v *.mpeg *.mpg *.wmv)",
+            video_file_dialog_filter(),
         )
         if not paths:
             return
